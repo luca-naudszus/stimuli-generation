@@ -46,7 +46,7 @@ def melody_physical_features(
 ) -> Dict[str, float]:
     """Physical distance features for a melody, analoguous to
     `progression_physical_features` for chords."""
-    path = assign_fingering_path(midi_sequence, scale_length_mm)
+    path = assign_fret_path(midi_sequence, scale_length_mm)
     steps = [fretboard_euclidean_mm(path[i], path[i + 1], scale_length_mm) for i in range(len(path) - 1)]
     n_steps = max(len(steps), 1)
     open_string_ratio = sum(1 for _, f in path if f == 0) / len(path)

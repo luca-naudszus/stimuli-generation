@@ -69,6 +69,6 @@ CHORD_VOCAB: Dict[str, Dict] = {
 }
 
 # currently not in use
-PROGRESSION_KEYS: Dict[str, Dict[str, str]] = {
-    key_name: diatonic_progression_labels(key_name) for key_name in DEFAULT_KEY_ROOTS
-}
+#PROGRESSION_KEYS: Dict[str, Dict[str, str]] = {
+#    key_name: diatonic_progression_labels(key_name) for key_name in DEFAULT_KEY_ROOTS
+#}

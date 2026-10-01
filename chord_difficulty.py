@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Dict
 from ukulele_geometry import fret_position_mm, DEFAULT_SCALE_LENGTH_MM
 
+DEFAULT_WEIGHTS = dict(span=1.0, fingers=3.0, barre=8.0)
+
 @dataclass
 class ChordDifficulty:
     span_mm: float
@@ -15,7 +17,13 @@ class ChordDifficulty:
     barre: bool
     score: float
 
-DEFAULT_WEIGHTS = dict(span=1.0, fingers=3.0, barre=8.0)
+@dataclass
+class TransitionDistance:
+    hand_shift_mm: float
+    finger_movement_mm: float
+    barre_change: bool
+    total_mm: float
+
 
 def is_barre(chord_shape: Dict[str, int]) -> bool:
     """Heuristik: 3+ Saiten am selben nicht-leeren Bund -> Barre.
@@ -67,12 +75,7 @@ def chord_difficulty(
     return ChordDifficulty(span_mm=span, num_fingers=fingers, barre=barre, score=score)
 
 
-@dataclass
-class TransitionDistance:
-    hand_shift_mm: float
-    finger_movement_mm: float
-    barre_change: bool
-    total_mm: float
+
 
 
 def chord_transition_distance(
@@ -104,3 +107,4 @@ def chord_transition_distance(
     total = hand_shift + finger_movement + penalty
     return TransitionDistance(hand_shift_mm=hand_shift, finger_movement_mm=finger_movement,
                                barre_change=barre_change, total_mm=total)
+

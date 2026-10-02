@@ -68,6 +68,20 @@ CHORD_VOCAB: Dict[str, Dict] = {
     for label, shape in CHORD_SHAPES.items()
 }
 
+def root_pc_from_label(label: str) -> int:
+    """Root pitch class of a chord label ('C' -> 0, 'F#m' -> 6, 'Bb' -> 10, 'Bdim' -> 11)."""
+    pc = NOTE_NAMES.index(label[0])
+    if len(label) > 1 and label[1] == "#":
+        pc += 1
+    elif len(label) > 1 and label[1] == "b":
+        pc -= 1
+    return pc % 12
+
+def major_scale_pcs(key_name: str, key_roots: Dict[str, int] = DEFAULT_KEY_ROOTS) -> set:
+    """Pitch classes of a major key, e.g. 'C' -> {0, 2, 4, 5, 7, 9, 11}."""
+    root = key_roots[key_name]
+    return {(root + step) % 12 for step in MAJOR_SCALE_STEPS}
+
 # currently not in use
 #PROGRESSION_KEYS: Dict[str, Dict[str, str]] = {
 #    key_name: diatonic_progression_labels(key_name) for key_name in DEFAULT_KEY_ROOTS

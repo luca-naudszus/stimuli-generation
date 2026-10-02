@@ -15,10 +15,8 @@ def progression_features(
     vocab: Dict[str, Dict] = None,
     scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM,
 ) -> Dict[str, float]:
-    """Aggregiert Einzelgriff- und Uebergangsschwierigkeit (physisch) sowie
-    die minimale Voice-Leading-Distanz (harmonisch) einer Akkordfolge zu
-    einem flachen Feature-Dict - kompatibel mit der bestehenden
-    `matched_split`-Funktion aus der Original-Pipeline."""
+    """Aggregates single chord and transition difficulty (physical) as well
+    as voice leading distance (harmonic) of a chord progression to one feature dict"""
     vocab = vocab or CHORD_VOCAB
     missing = [c for c in chord_labels if vocab.get(c, {}).get("shape") is None]
     if missing:

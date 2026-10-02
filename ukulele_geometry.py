@@ -15,7 +15,7 @@ DEFAULT_SCALE_LENGTH_MM = SCALE_LENGTHS_MM["soprano"]
 
 
 def fret_position_mm(fret: int, scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM) -> float:
-    """Physische Distanz eines Bundes vom Sattel (nut), nach der
+    """Physical distance of a fret from the nut, using the
     "Rule of 18": D(n) = scale_length * (1 - 2^(-n/12)). fret=0 -> 0.0."""
     if fret <= 0:
         return 0.0
@@ -27,9 +27,9 @@ def fretboard_euclidean_mm(
     pos_b: Tuple[str, int],
     scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM,
 ) -> float:
-    """Euklidische physische Distanz zwischen zwei Griffbrett-Positionen
-    (Saite, Bund): "along" (nichtlinearer Bundabstand) + "across"
-    (linearer Saitenabstand)."""
+    """Euclidean physical distance between two [string, fret]-positions:
+    "along" (non linear fret distance) + "across"
+    (linear string distance)."""
     str_a, fret_a = pos_a
     str_b, fret_b = pos_b
     dx = fret_position_mm(fret_b, scale_length_mm) - fret_position_mm(fret_a, scale_length_mm)

@@ -26,10 +26,8 @@ class TransitionDistance:
 
 
 def is_barre(chord_shape: Dict[str, int]) -> bool:
-    """Heuristik: 3+ Saiten am selben nicht-leeren Bund -> Barre.
-    Caveat: markiert z.B. auch D (2-2-2-0) als Barre, obwohl das ueblicher-
-    weise mit 3 Einzelfingern gegriffen wird - vor produktivem Einsatz ggf.
-    verschaerfen (z.B. zusaetzlich Bund >= 3 verlangen)."""
+    """Defines chords with 3+ strings at the same non-empty fret as Barré. 
+    Not 100% true, e.g. D major."""
     frets = [f for f in chord_shape.values() if f > 0]
     if not frets:
         return False
@@ -38,8 +36,7 @@ def is_barre(chord_shape: Dict[str, int]) -> bool:
 
 
 def chord_span_mm(chord_shape: Dict[str, int], scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM) -> float:
-    """Physische Spannweite der Greifhand (mm) zwischen niedrigstem und
-    hoechstem gegriffenen (nicht-leeren) Bund."""
+    """Physical chord span (mm) between lowest and highest played fret."""
     fretted = [f for f in chord_shape.values() if f > 0]
     if not fretted:
         return 0.0
@@ -48,7 +45,7 @@ def chord_span_mm(chord_shape: Dict[str, int], scale_length_mm: float = DEFAULT_
 
 
 def num_fingers_required(chord_shape: Dict[str, int]) -> int:
-    """Grobe Schaetzung der benoetigten Finger (Barre zaehlt einmal)."""
+    """Rough estimation of number of required fingers."""
     fretted = [f for f in chord_shape.values() if f > 0]
     if not fretted:
         return 0
@@ -64,9 +61,7 @@ def chord_difficulty(
     scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM,
     weights: Dict[str, float] = None,
 ) -> ChordDifficulty:
-    """Einzelgriff-Schwierigkeit (unabhaengig von Uebergaengen), transparente
-    Rohkomponenten statt Blackbox-Zahl - editierbar/validierbar gegen
-    Pilotdaten."""
+    """Difficulty of single chords, independent of transitions."""
     weights = weights or DEFAULT_WEIGHTS
     span = chord_span_mm(chord_shape, scale_length_mm)
     fingers = num_fingers_required(chord_shape)

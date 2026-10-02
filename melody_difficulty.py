@@ -30,7 +30,7 @@ def assign_fret_path(
     for pitch in midi_sequence:
         candidates = pitch_to_positions(pitch, max_fret)
         if not candidates:
-            raise ValueError(f"MIDI-Ton {pitch} auf keiner Saite innerhalb {max_fret} Buenden greifbar.")
+            raise ValueError(f"MIDI pitch {pitch} not playable on any string within {max_fret} frets.")
         if prev is None:
             chosen = min(candidates, key=lambda p: p[1])
         else:

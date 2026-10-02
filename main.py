@@ -10,7 +10,7 @@ from typing import List
 
 from chord_difficulty import chord_difficulty, chord_transition_distance
 from harmonic_distance import minimal_voice_leading_distance
-from melody_distance import melody_physical_features
+from melody_features import melody_features
 from chord_vocab import CHORD_VOCAB, CHORD_SHAPES
 from progression_features import progression_features
 
@@ -79,7 +79,8 @@ def _demo():
 
     print("=== Melodie-Beispiel (C-Dur-Tonleiter, 8 Toene) ===\n")
     c_major_scale_midi = [60, 62, 64, 65, 67, 69, 71, 72]
-    mf = melody_physical_features(c_major_scale_midi)
+    C_MAJOR_PCS = {0, 2, 4, 5, 7, 9, 11}
+    mf = melody_features(c_major_scale_midi, key_pcs=C_MAJOR_PCS)
     for k, v in mf.items():
         print(f"{k}: {v:.2f}" if isinstance(v, float) else f"{k}: {v}")
 

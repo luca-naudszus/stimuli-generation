@@ -5,6 +5,7 @@ Musical (pitch-based) features of a melody. Needs only MIDI numbers,
 no fingering and no instrument geometry - the melodic counterpart
 to harmonic_distance.py.
 """
+#TODO: Add expectancy
 
 from typing import Dict, List, Optional, Sequence, Set
 

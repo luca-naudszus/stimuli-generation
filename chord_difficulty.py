@@ -4,6 +4,9 @@ chord_difficulty.py
 
 """
 
+#TODO: For single chords, we are missing: chord uncommonness, right hand complexity
+#TODO: For chord progressions, we are missing: repetitiveness, chord progression tempo, beat difficulty
+
 from dataclasses import dataclass
 from typing import Dict
 from ukulele_geometry import fret_position_mm, DEFAULT_SCALE_LENGTH_MM
@@ -68,10 +71,6 @@ def chord_difficulty(
     barre = is_barre(chord_shape)
     score = weights["span"] * span + weights["fingers"] * fingers + weights["barre"] * barre
     return ChordDifficulty(span_mm=span, num_fingers=fingers, barre=barre, score=score)
-
-
-
-
 
 def chord_transition_distance(
     chord_a: Dict[str, int],

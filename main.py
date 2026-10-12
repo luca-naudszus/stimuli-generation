@@ -1,89 +1,83 @@
 """
 main.py
 =============================
+Pipeline runner: generate n progressions and n melodies, evaluate all features
+(physical, musical, variation check) and write one CSV per type.
 
+    python main.py                       # sizes/lengths/seed from config.py
+    python main.py --n-progressions 500 --n-melodies 100 --seed 7
 """
 
-from __future__ import annotations
-import itertools
-from typing import List
+import argparse
+import csv
+import os
+from typing import Dict, List
 
-from chord_difficulty import chord_difficulty, chord_transition_distance
-from harmonic_distance import minimal_voice_leading_distance
-from melody_features import melody_features
-from chord_vocab import CHORD_VOCAB, CHORD_SHAPES
+import config
+from chord_vocab import CHORD_VOCAB, validate_chord_shapes
+from tone_vocab import TONE_VOCAB
+from generate_sequences import generate_progressions, generate_melodies
 from progression_features import progression_features
+from melody_features import melody_features
+from variation_check import variation_features_progression, variation_features_melody
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-### Currently not in use
-def midi_from_object(obj) -> int:
-    """Duck typing adapter for raw int MIDI numbers or music21 objects."""
-    if isinstance(obj, int):
-        return obj
-    if hasattr(obj, "pitch") and hasattr(obj.pitch, "midi"):
-        return int(obj.pitch.midi)
-    if hasattr(obj, "midi"):
-        return int(obj.midi)
-    return int(obj)
+def evaluate_progression(chord_ids: List[str]) -> Dict[str, float]:
+    feats = progression_features(chord_ids)
+    feats.update(variation_features_progression(chord_ids))
+    return feats
 
-def _pearson(xs: List[float], ys: List[float]) -> float:
-    n = len(xs)
-    mx, my = sum(xs) / n, sum(ys) / n
-    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / n
-    sx = (sum((x - mx) ** 2 for x in xs) / n) ** 0.5
-    sy = (sum((y - my) ** 2 for y in ys) / n) ** 0.5
-    return cov / (sx * sy)
 
-# ---------------------------------------------------------------------------
-# Demo
-# ---------------------------------------------------------------------------
+def evaluate_melody(tone_ids: List[str]) -> Dict[str, float]:
+    midi = [TONE_VOCAB[t]["midi"] for t in tone_ids]
+    path = [TONE_VOCAB[t]["position"] for t in tone_ids]
+    feats = melody_features(midi, path=path, leap_threshold=3)
+    feats.update(variation_features_melody(tone_ids))
+    return feats
 
-def _demo():
-    print(f"=== Vokabular: {len(CHORD_SHAPES)} manuell definierte Akkorde ===\n")
 
-    print("Example chords:")
-    # TODO: Define D, A, Bdim, F#dim
-    for label in ["C", "G", "F", "Am", "Dm", "Em", "D", "A", "Bdim", "F#dim"]:
-        if label in CHORD_SHAPES:
-            d = chord_difficulty(CHORD_SHAPES[label])
-            print(f"  {label:>5}: {CHORD_SHAPES[label]}  "
-                  f"(span={d.span_mm:5.1f}mm, fingers={d.num_fingers}, barre={d.barre})")
-    print()
+def _rows(prefix: str, sequences: List[List[str]], vocab: Dict, evaluate) -> List[Dict]:
+    rows = []
+    for k, ids in enumerate(sequences, start=1):
+        row = dict(
+            id=f"{prefix}{k:04d}",
+            sequence=" | ".join(ids),
+            labels=" ".join(vocab[i]["label"] for i in ids),
+        )
+        row.update(evaluate(ids))
+        rows.append(row)
+    return rows
 
-    print("=== Akkordfolgen: physisch vs. minimale Voice-Leading-Distanz ===\n")
-    progressions = {
-        "I-IV-V-I (C-Dur)": ["C", "F", "G", "C"],
-        "I-vi-ii-V (C-Dur)": ["C", "Am", "Dm", "G"],
-        "Em -> E -> Em -> E (harmonisch nah, physisch teuer)": ["Em", "E", "Em", "E"],
-    }
-    for label, prog in progressions.items():
-        feats = progression_features(prog)
-        print(f"-- {label}: {prog}")
-        print(f"   mean physische Uebergangsdistanz : {feats['mean_transition_physical_mm']:.1f} mm")
-        print(f"   mean minimale Voice-Leading-Distanz: {feats['mean_minimal_voice_leading']:.1f}")
-        print(f"   Barre-Wechsel unterwegs            : {feats['barre_changes']}\n")
 
-    print("=== Korrelationstest ueber alle Akkordpaare mit gefundener Position ===\n")
-    labels = list(CHORD_SHAPES.keys())
-    phys, harm = [], []
-    for a, b in itertools.combinations(labels, 2):
-        t = chord_transition_distance(CHORD_SHAPES[a], CHORD_SHAPES[b])
-        h = minimal_voice_leading_distance(CHORD_VOCAB[a]["pitch_classes"], CHORD_VOCAB[b]["pitch_classes"])
-        phys.append(t.total_mm)
-        harm.append(h)
-    r = _pearson(phys, harm)
-    print(f"Pearson r (physisch vs. harmonisch), n={len(phys)} Paare: {r:.3f}")
+def write_csv(path: str, rows: List[Dict]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: (round(v, 4) if isinstance(v, float) else v) for k, v in r.items()})
 
-    print("=== Melodie-Beispiel (C-Dur-Tonleiter, 8 Toene) ===\n")
-    c_major_scale_midi = [60, 62, 64, 65, 67, 69, 71, 72]
-    C_MAJOR_PCS = {0, 2, 4, 5, 7, 9, 11}
-    mf = melody_features(c_major_scale_midi, key_pcs=C_MAJOR_PCS)
-    for k, v in mf.items():
-        print(f"{k}: {v:.2f}" if isinstance(v, float) else f"{k}: {v}")
+
+def run(n_progressions: int, n_melodies: int, seed: int, out_dir: str) -> None:
+    validate_chord_shapes()
+
+    progs = generate_progressions(n_progressions, seed=seed)
+    prog_rows = _rows("P", progs, CHORD_VOCAB, evaluate_progression)
+    write_csv(os.path.join(out_dir, "progressions.csv"), prog_rows)
+
+    mels = generate_melodies(n_melodies, seed=seed)
+    mel_rows = _rows("M", mels, TONE_VOCAB, evaluate_melody)
+    write_csv(os.path.join(out_dir, "melodies.csv"), mel_rows)
+
+    print(f"{len(prog_rows)} progressions -> {out_dir}/progressions.csv")
+    print(f"{len(mel_rows)} melodies     -> {out_dir}/melodies.csv")
 
 
 if __name__ == "__main__":
-    _demo()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n-progressions", type=int, default=config.N_PROGRESSIONS)
+    ap.add_argument("--n-melodies", type=int, default=config.N_MELODIES)
+    ap.add_argument("--seed", type=int, default=config.SEED)
+    ap.add_argument("--out-dir", default=config.OUTPUT_DIR)
+    a = ap.parse_args()
+    run(a.n_progressions, a.n_melodies, a.seed, a.out_dir)

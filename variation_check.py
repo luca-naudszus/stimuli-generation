@@ -26,6 +26,63 @@ from chord_difficulty import chord_transition_distance, num_fingers_required
 from tone_vocab import TONE_VOCAB, TONE_VARIANTS
 
 
+@lru_cache(maxsize=None)
+def _chord_trans(a: str, b: str, scale_length_mm: float) -> float:
+    return chord_transition_distance(CHORD_VOCAB[a]["shape"], CHORD_VOCAB[b]["shape"], scale_length_mm).total_mm
+
+
+@lru_cache(maxsize=None)
+def _chord_fingers(a: str) -> float:
+    return float(num_fingers_required(CHORD_VOCAB[a]["shape"]))
+
+
+@lru_cache(maxsize=None)
+def _tone_trans(a: str, b: str, scale_length_mm: float) -> float:
+    return fretboard_euclidean_mm(TONE_VOCAB[a]["position"], TONE_VOCAB[b]["position"], scale_length_mm)
+
+
+@lru_cache(maxsize=None)
+def _tone_fingers(a: str) -> float:
+    return 1.0 if TONE_VOCAB[a]["position"][1] > 0 else 0.0
+
+
+def _viterbi_path(alts: List[List[str]], trans: Callable[[str, str], float],
+                  fingers: Callable[[str], float]) -> List[str]:
+    """Variant path with minimal total transition cost (mm). Ties (within 1e-6 mm)
+    are broken by the smaller total number of fingers, then by vocabulary order."""
+    layers = [{a: ((0.0, fingers(a)), None) for a in alts[0]}]
+    for i in range(1, len(alts)):
+        prev = layers[-1]
+        layer = {}
+        for b in alts[i]:
+            best_cost, best_a = None, None
+            for a in prev:
+                cost = (round(prev[a][0][0] + trans(a, b), 6), prev[a][0][1] + fingers(b))
+                if best_cost is None or cost < best_cost:
+                    best_cost, best_a = cost, a
+            layer[b] = (best_cost, best_a)
+        layers.append(layer)
+    last = min(layers[-1], key=lambda b: layers[-1][b][0])
+    path = [last]
+    for i in range(len(layers) - 1, 0, -1):
+        path.append(layers[i][path[-1]][1])
+    return path[::-1]
+
+
+def optimal_progression_ids(labels: Sequence[str],
+                            scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM) -> List[str]:
+    """Best variant ID for every chord label of a progression."""
+    alts = [CHORD_VARIANTS[l] for l in labels]
+    return _viterbi_path(alts, lambda a, b: _chord_trans(a, b, scale_length_mm), _chord_fingers)
+
+
+def optimal_melody_ids(labels: Sequence[str],
+                       scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM) -> List[str]:
+    """Best variant ID (string/fret position) for every tone label of a melody."""
+    alts = [TONE_VARIANTS[l] for l in labels]
+    return _viterbi_path(alts, lambda a, b: _tone_trans(a, b, scale_length_mm), _tone_fingers)
+
+
 def _viterbi_min_cost(alts: List[List[str]], trans: Callable[[str, str], float]) -> float:
     """Minimal total transition cost when every position may use any of its alternatives."""
     best = {a: 0.0 for a in alts[0]}

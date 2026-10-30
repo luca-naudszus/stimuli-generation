@@ -1,87 +1,71 @@
 """
 config.py
 =============================
-Central settings for sequence generation, stimulus selection and export.
+All parameters of the controlled-stimulus pipeline (build spec v1.3).
+Change values here; nothing else is hard-coded.
 """
 
 SEED = 42
 
 # ---------------------------------------------------------------------------
-# Sequences
+# Instrument / key (build spec sections 1, 2, 10)
 # ---------------------------------------------------------------------------
-PROGRESSION_LENGTH = 4       # chords per progression
-MELODY_LENGTH = 8            # tones per melody
-ALLOW_CHORD_REPEAT = False   # same chord label twice in a row?
-ALLOW_TONE_REPEAT = True     # same tone twice in a row?
-MAX_MELODY_LEAP = 5          # max. interval between consecutive tones (semitones)
-MAX_FRET = 12                # highest fret used for deriving tone positions
-
-# 'optimal': best variants per label sequence (min. total transition mm, ties: fewest fingers)
-# 'random' : variants drawn uniformly (only useful for studying 'unnecessary variation')
-VARIANT_MODE = "optimal"
+FRET_MAX = 4                 # first position = frets 0-4
+KEY = "C"                    # major key root (name from music_theory.NOTE_NAMES); None = free chromatic
+FINGER_RULE = "fret"         # left-hand finger = fret number (open string = 0, frets above 4 -> 4)
+MAX_STRING_SPAN = 3          # a base uses at most this many ADJACENT strings (G-C-E-A order)
 
 # ---------------------------------------------------------------------------
-# Exploration run (python main.py explore)
+# Item structure (section 2)
 # ---------------------------------------------------------------------------
-N_PROGRESSIONS = 200
-N_MELODIES = 200
-OUTPUT_DIR = "output"
-
-# Variation check: improvements smaller than this are ignored
-VARIATION_TOLERANCE_TRANSITION_MM = 1.0
-VARIATION_TOLERANCE_FINGERS = 0.0
+CHUNK_LEN = 3                # notes per musical chunk
+N_CHUNKS = 4                 # musical chunks per item -> N_NOTES = 12
+N_NOTES = CHUNK_LEN * N_CHUNKS
+BPM = 90                     # one note per beat, quarter notes, 4/4
+BEATS_PER_BAR = 4
 
 # ---------------------------------------------------------------------------
-# Stimulus selection (python main.py stimuli)
+# Boundary cue (section 3). Thresholds in semitones.
 # ---------------------------------------------------------------------------
-STIMULI_DIR = "stimuli"
-SET_NAMES = ("A", "B")       # two parallel sets per strand
-ITEMS_PER_SET = 50
-
-# Candidate pool per strand (progressions: capped by the number of possible label sequences)
-POOL_SIZE = {"progressions": 20000, "melodies": 20000}
-
-# Difficulty = weighted mean of z-scored PHYSICAL features, then percentile rank within the strand
-DIFFICULTY_FEATURES = {
-    "progressions": {"mean_chord_difficulty_score": 1.0, "mean_transition_physical_mm": 1.0,
-                     "max_transition_physical_mm": 1.0, "mean_chord_span_mm": 1.0},
-    "melodies":     {"mean_step_distance_mm": 1.0, "max_step_distance_mm": 1.0},
-}
-DIFFICULTY_PCT_RANGE = (5.0, 95.0)   # difficulty percentiles covered by the ramp
-DIFFICULTY_MATCH_WEIGHT = 0.5        # weight of the percentile gap A_i vs B_i when pairing
-MIN_CANDIDATES = 15                  # window around the target percentile is widened below this
-
-# Musical features whose spread is maximised within a set and matched between sets A and B.
-# out_of_key_ratio is deliberately NOT in this list: it is limited by OUT_OF_KEY_CAP below, and
-# rewarding its spread would make the selection prefer out-of-key items whenever the cap allows it.
-SELECTION_FEATURES = {
-    "progressions": ["mean_minimal_voice_leading", "max_minimal_voice_leading", "common_tone_ratio",
-                     "mean_root_motion_fifths", "n_unique_chords"],
-    "melodies":     ["mean_interval_semitones", "leap_ratio", "ambitus_semitones",
-                     "direction_changes", "n_pitch_classes"],
-}
-
-# Only sequences whose variants are optimal for BOTH transition distance and number of fingers
-# enter the pool (no 'unnecessary variation' in either sense). Tolerances: VARIATION_TOLERANCE_*.
-REQUIRE_NO_AVOIDABLE_COST = True
-
-# Paired items A_i / B_i must not be reversals of each other (identical features!) and may share at
-# most this many transitions (unordered label pairs). Reversals are also excluded across the whole selection.
-PAIR_MAX_SHARED_TRANSITIONS = {"progressions": 0, "melodies": 1}
-
-# Upper limit for out_of_key_ratio, rising linearly along the difficulty ramp from the first
-# to the second value (reached at OUT_OF_KEY_RAMP_END of the set, then constant).
-# Idea: lessons start diatonic, accidentals come later. None = no limit.
-OUT_OF_KEY_CAP = {"progressions": (0.0, 0.25), "melodies": (0.0, 0.25)}
-OUT_OF_KEY_RAMP_END = 0.6
+LEAP_MIN = 3                 # leap cue: |boundary interval| >= LEAP_MIN and > every within-chunk interval
+LEAP_MAX = 7                 # maximum leap
+ALLOW_LEAP_CUE = True
+ALLOW_DIRECTION_CUE = True   # direction change; requires monotonic neighbouring chunks
+# Within-chunk intervals must stay below LEAP_MIN (no competing cue); consecutive repeats are forbidden.
+ALLOW_CHUNK_REPEAT_IN_ITEM = False   # the same musical chunk twice in one item (implementation choice)
 
 # ---------------------------------------------------------------------------
-# Export (tab + MIDI)
+# Chunking versions (section 4)
 # ---------------------------------------------------------------------------
-BAR_DURATION_S = 3.0         # duration of one bar in seconds (tempo = 60 * BEATS_PER_BAR / this)
-BEATS_PER_BAR = 4            # quarter-note beats per bar (time signature x/4)
-MELODY_NOTE_BEATS = 1.0      # note length in beats (1.0 = quarter note, 0.5 = eighth)
-CHORD_BARS = 1               # bars per chord (block chord, struck once)
-MIDI_PPQ = 480               # ticks per quarter note
-MIDI_PROGRAM = 24            # General MIDI: 24 = nylon string guitar (there is no ukulele)
+MISALIGNMENT_DEGREE = 2      # number of musical boundaries NOT in the misaligned motor boundaries (1, 2, 3)
+MOTOR_PARTS = (2, 3)         # motor chunk lengths
+
+# ---------------------------------------------------------------------------
+# Alternate fingering (section 5)
+# ---------------------------------------------------------------------------
+ALT_MIN_CHUNKS = 2           # alternate fingering used in >= this many chunks of an alternate item
+ALT_MIN_NOTES_MOVED = 2
+
+# ---------------------------------------------------------------------------
+# Prototype set search (feasibility)
+# ---------------------------------------------------------------------------
+N_BASES = 3                  # minimum 3; more bases make recurrence easier
+N_TRAINED_CHUNKS = 6
+SEARCH_TRIALS = 3000         # random chunk subsets tried per degree
+RDM_THRESHOLD = 0.3          # |r| below this counts as separable
+
+# ---------------------------------------------------------------------------
+# Probes (listen-only; section 5, types are parameters)
+# ---------------------------------------------------------------------------
+PROBE_TRANSPOSITION_SEMITONES = 2
+ACCENT_LOUD = 115            # accent variant: loud on the first note of each MISALIGNED motor chunk (regrouping), soft elsewhere
+ACCENT_SOFT = 70
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+MIDI_PPQ = 480
+MIDI_PROGRAM = 24            # General MIDI 24 = nylon string guitar (no ukulele in GM)
 MIDI_VELOCITY = 90
+NOTE_GATE = 0.95             # fraction of a beat a note sounds
+OUTPUT_DIR = "output"

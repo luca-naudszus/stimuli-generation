@@ -4,9 +4,6 @@ chord_difficulty.py
 
 """
 
-#TODO: For single chords, we are missing: chord uncommonness, right hand complexity
-#TODO: For chord progressions, we are missing: repetitiveness, chord progression tempo, beat difficulty
-
 from dataclasses import dataclass
 from typing import Dict
 from ukulele_geometry import fret_position_mm, DEFAULT_SCALE_LENGTH_MM
@@ -29,8 +26,10 @@ class TransitionDistance:
 
 
 def is_barre(chord_shape: Dict[str, int]) -> bool:
-    """Defines chords with 3+ strings at the same non-empty fret as Barré. 
-    Not 100% true, e.g. D major."""
+    """Heuristik: 3+ Saiten am selben nicht-leeren Bund -> Barre.
+    Caveat: markiert z.B. auch D (2-2-2-0) als Barre, obwohl das ueblicher-
+    weise mit 3 Einzelfingern gegriffen wird - vor produktivem Einsatz ggf.
+    verschaerfen (z.B. zusaetzlich Bund >= 3 verlangen)."""
     frets = [f for f in chord_shape.values() if f > 0]
     if not frets:
         return False
@@ -39,7 +38,8 @@ def is_barre(chord_shape: Dict[str, int]) -> bool:
 
 
 def chord_span_mm(chord_shape: Dict[str, int], scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM) -> float:
-    """Physical chord span (mm) between lowest and highest played fret."""
+    """Physische Spannweite der Greifhand (mm) zwischen niedrigstem und
+    hoechstem gegriffenen (nicht-leeren) Bund."""
     fretted = [f for f in chord_shape.values() if f > 0]
     if not fretted:
         return 0.0
@@ -48,7 +48,7 @@ def chord_span_mm(chord_shape: Dict[str, int], scale_length_mm: float = DEFAULT_
 
 
 def num_fingers_required(chord_shape: Dict[str, int]) -> int:
-    """Rough estimation of number of required fingers."""
+    """Grobe Schaetzung der benoetigten Finger (Barre zaehlt einmal)."""
     fretted = [f for f in chord_shape.values() if f > 0]
     if not fretted:
         return 0
@@ -64,13 +64,19 @@ def chord_difficulty(
     scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM,
     weights: Dict[str, float] = None,
 ) -> ChordDifficulty:
-    """Difficulty of single chords, independent of transitions."""
+    """Einzelgriff-Schwierigkeit (unabhaengig von Uebergaengen), transparente
+    Rohkomponenten statt Blackbox-Zahl - editierbar/validierbar gegen
+    Pilotdaten."""
     weights = weights or DEFAULT_WEIGHTS
     span = chord_span_mm(chord_shape, scale_length_mm)
     fingers = num_fingers_required(chord_shape)
     barre = is_barre(chord_shape)
     score = weights["span"] * span + weights["fingers"] * fingers + weights["barre"] * barre
     return ChordDifficulty(span_mm=span, num_fingers=fingers, barre=barre, score=score)
+
+
+
+
 
 def chord_transition_distance(
     chord_a: Dict[str, int],

@@ -57,6 +57,10 @@ def run():
                and [int(r["bar_index"]) for r in b1] == [1] * 3 + [2] * 3 + [3] * 3 + [4] * 3)
         expect("note table: scale degrees relative to the item's key", [r["scale_degree"] for r in b1] == [keys.scale_degree(p, "C") for p in base.pitches])
         rows = {r["item_id"]: r for r in itm}
+        asg = list(csv.DictReader(open(os.path.join(d, "assignment_template.csv"))))
+        expect("assignment template: one row per item, withheld_alternate column (v1.7)",
+               len(asg) == len(items) and "withheld_alternate" in asg[0]
+               and all((r["withheld_alternate"] == "0") == (r["variant_type"] == "alternate fingering") for r in asg))
         expect("item table: bases are fully trained", rows["B1"]["prop_trained_musical"] == "1.0" and rows["B1"]["prop_trained_motor_misaligned"] == "1.0")
         if alt:
             expect("item table: alternate fingering keeps the musical chunks, not all motor chunks",

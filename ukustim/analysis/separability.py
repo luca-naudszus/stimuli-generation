@@ -10,6 +10,14 @@ evaluation sets the spec names, plus the scores used as the objective of the set
   E2  three-level contrasts: all played family members (base, alternate fingering, string-pair shift,
       played transposition)
   Nuisance models (scale degree, phrase position, beat x degree) are correlated with the chunk models on E1.
+  C-VIII  collinearity of the combination components (sound, movement, interaction, structure) over E2: each
+      component regressed on the others (on ranks, matching the Spearman correlations); multiple R and variance
+      inflation factor (VIF). "Threshold as for |r|" (build spec section 8) is read as multiple R < RDM_THRESHOLD,
+      i.e. VIF < 1 / (1 - RDM_THRESHOLD^2) (1.10 for 0.3).
+  Reports without optimization (build spec section 8): r(finger, fret), r(string, absolute pitch) over the played
+      items (M-IV); r(absolute pitch, scale degree), r(interval size, musical boundary), the A-IV split
+      (concrete / relational / tonal) and the variance of the interval and contour RDMs over all heard items,
+      listen-only probes included (A-IV).
 All models are listed in analysis/models.py. Target |r| < config.RDM_THRESHOLD.
 """
 
@@ -18,7 +26,7 @@ import math
 from typing import Dict, Optional, Sequence
 
 import numpy as np
-from scipy.stats import spearmanr
+from scipy.stats import rankdata, spearmanr
 
 from ukustim import config
 from ukustim.analysis import models as md
@@ -41,6 +49,13 @@ PAIRS_EXTRA = [("motor_chunk_misal_lh", "movement_identity"),   # identity is sp
                ("musical_chunk", "motor_chunk_crossing_lh")]
 
 
+M4_PAIRS = [("finger", "fret"), ("string", "abs_pitch")]
+A4_PAIRS = [("abs_pitch", "scale_degree"), ("interval_size", "musical_boundary"),
+            ("abs_pitch", "intervals"), ("abs_pitch", "contour"), ("intervals", "scale_degree"),
+            ("contour", "scale_degree")]
+A4_VARIANCE_MODELS = ["intervals", "contour"]
+
+
 def _upper(M: np.ndarray) -> np.ndarray:
     return M[np.triu_indices(M.shape[0], k=1)]
 
@@ -61,8 +76,49 @@ def pair_correlations(items: Sequence[Item], pairs) -> Dict[tuple, float]:
     return {(a, b): _corr(_upper(rdms[a]), _upper(rdms[b])) for a, b in pairs}
 
 
+def collinearity(items: Sequence[Item], components: Sequence[str] = None) -> Dict:
+    """Multiple R and VIF of each component regressed on the others (ranks of the upper-triangle RDM values),
+    plus pairwise Spearman r, over the given items (normally E2, the played family members)."""
+    components = list(components or md.C8_COMPONENTS)
+    rdms = md.model_rdms(items, components)
+    X = {c: _upper(rdms[c]) for c in components}
+    comp_out = {}
+    for c in components:
+        y = X[c]
+        others = [X[o] for o in components if o != c and np.std(X[o]) > 0]
+        if len(y) < 3 or np.std(y) == 0:
+            comp_out[c] = dict(R=float("nan"), vif=float("nan"))
+            continue
+        yr = rankdata(y)
+        A = np.column_stack([rankdata(o) for o in others] + [np.ones(len(y))])
+        coef, *_ = np.linalg.lstsq(A, yr, rcond=None)
+        r2 = 1 - np.sum((yr - A @ coef) ** 2) / np.sum((yr - yr.mean()) ** 2)
+        r2 = min(max(r2, 0.0), 1.0)
+        comp_out[c] = dict(R=math.sqrt(r2), vif=float(1 / (1 - r2)) if r2 < 1 - 1e-12 else float("inf"))
+    pairs = {(a, b): _corr(X[a], X[b]) for a, b in itertools.combinations(components, 2)}
+    return dict(n_conditions=len([i for i in items if i.played]), components=comp_out, pairs=pairs)
+
+
+def score_c8_of(col: Dict) -> float:
+    """Largest multiple R over the C-VIII components (undefined = 1)."""
+    return max((1.0 if math.isnan(v["R"]) else v["R"]) for v in col["components"].values())
+
+
+def descriptive_reports(items: Sequence[Item]) -> Dict:
+    """Build spec section 8, 'reports without optimization': M-IV over played items, A-IV over all heard items."""
+    played = [i for i in items if i.played]
+    m4 = pair_correlations(played, M4_PAIRS)
+    names = sorted({m for p in A4_PAIRS for m in p} | set(A4_VARIANCE_MODELS))
+    rdms = md.model_rdms(items, names, include_listen_only=True)
+    a4 = {(a, b): _corr(_upper(rdms[a]), _upper(rdms[b])) for a, b in A4_PAIRS}
+    var = {m: dict(variance=float(np.var(_upper(rdms[m]))), distinct=int(len(np.unique(np.round(_upper(rdms[m]), 9)))))
+           for m in A4_VARIANCE_MODELS}
+    return dict(n_played=len(played), n_heard=len(items), m4=m4, a4=a4, a4_variance=var)
+
+
 def report(items: Sequence[Item]) -> Dict:
-    """Full separability report: evaluation sets E1 and E2, nuisance correlations, full matrix over all played items."""
+    """Full separability report: evaluation sets E1 and E2, nuisance correlations, C-VIII collinearity, descriptive
+    M-IV / A-IV reports, full matrix over all played items."""
     e1, e2 = _subset(items, E1_VARIANTS), _subset(items, E2_VARIANTS)
     played = [i for i in items if i.played]
     rdms = md.model_rdms(played)
@@ -75,7 +131,9 @@ def report(items: Sequence[Item]) -> Dict:
         models=md.MODELS, corr=corr, all=n(played),
         e1=dict(n(e1), pairs=pair_correlations(e1, PAIRS_E1 + PAIRS_EXTRA)),
         e2=dict(n(e2), pairs=pair_correlations(e2, PAIRS_E2)),
-        nuisance=pair_correlations(e1, PAIRS_NUISANCE))
+        nuisance=pair_correlations(e1, PAIRS_NUISANCE),
+        c8=collinearity(e2, md.C8_COMPONENTS), c8_product=collinearity(e2, md.C8_COMPONENTS_PRODUCT),
+        descriptive=descriptive_reports(items))
 
 
 def _worst(pairs: Dict[tuple, float], wanted) -> float:
@@ -88,15 +146,23 @@ def score_e1(rep: Dict) -> float:
 
 
 def score_e2(rep: Dict) -> float:
-    return _worst(rep["e2"]["pairs"], PAIRS_E2)
+    s = _worst(rep["e2"]["pairs"], PAIRS_E2)
+    return max(s, score_c8_of(rep["c8"])) if config.E2_INCLUDES_C8 else s
+
+
+def score_c8(rep: Dict) -> float:
+    return score_c8_of(rep["c8"])
 
 
 def scores(items: Sequence[Item]):
-    """(E1 score, E2 score): worst |r| over the pairs that must separate in each evaluation set. Computes only the
-    models it needs, so it is cheap enough for the search."""
+    """(E1 score, E2 score): worst |r| over the pairs that must separate in each evaluation set. With
+    config.E2_INCLUDES_C8 the E2 score is also at least the largest multiple R of the C-VIII components. Computes
+    only the models it needs, so it is cheap enough for the search."""
     e1, e2 = _subset(items, E1_VARIANTS), _subset(items, E2_VARIANTS)
-    return (_worst(pair_correlations(e1, PAIRS_E1), PAIRS_E1),
-            _worst(pair_correlations(e2, PAIRS_E2), PAIRS_E2))
+    s2 = _worst(pair_correlations(e2, PAIRS_E2), PAIRS_E2)
+    if config.E2_INCLUDES_C8:
+        s2 = max(s2, score_c8_of(collinearity(e2, md.C8_COMPONENTS)))
+    return _worst(pair_correlations(e1, PAIRS_E1), PAIRS_E1), s2
 
 
 def objective(items: Sequence[Item]) -> float:
@@ -127,6 +193,34 @@ def format_report(rep: Dict) -> str:
     lines.append("Nuisance models vs chunk models (E1; report only, chunk models must not be explained by them):")
     for (a, b), r in rep["nuisance"].items():
         lines.append(f"  {a:<24} vs {b:<24} r = {_fmt(r, thr)}")
+    vif_max = 1 / (1 - thr ** 2)
+    for key, title in (("c8", "C-VIII components (E2): collinearity, each regressed on the others"),
+                       ("c8_product", "C-VIII, alternative interaction 1 - s_sound x s_move")):
+        col = rep[key]
+        lines += ["", f"{title}; target multiple R < {thr} (VIF < {vif_max:.2f}); {col['n_conditions']} items"
+                  + ("" if key == "c8" or config.E2_INCLUDES_C8 is False else "   (report only)")]
+        for c, v in col["components"].items():
+            if math.isnan(v["R"]):
+                lines.append(f"  {c:<26} constant (n/a)")
+            else:
+                ok = "ok" if v["R"] < thr else "ABOVE THRESHOLD"
+                lines.append(f"  {c:<26} R = {v['R']:.2f}   VIF = {v['vif']:.2f}   {ok}")
+        if key == "c8":
+            for (a, b), r in col["pairs"].items():
+                lines.append(f"    {a:<24} vs {b:<24} r = {_fmt(r, thr)}")
+    d = rep["descriptive"]
+    lines += ["", f"Reports without optimization (build spec section 8):",
+              f"  M-IV, over the {d['n_played']} played items:"]
+    for (a, b), r in d["m4"].items():
+        lines.append(f"    {a:<22} vs {b:<22} r = {'n/a' if math.isnan(r) else f'{r:+.2f}'}")
+    lines.append(f"  A-IV, over all {d['n_heard']} heard items (listen-only probes included):")
+    for (a, b), r in d["a4"].items():
+        lines.append(f"    {a:<22} vs {b:<22} r = {'n/a' if math.isnan(r) else f'{r:+.2f}'}")
+    for m, v in d["a4_variance"].items():
+        lines.append(f"    variance of the {m} RDM: {v['variance']:.4f} ({v['distinct']} distinct distances)")
+    lines += ["", "Models and the research questions they serve (build spec section 8a):"]
+    for models_, serves, sep_from in md.MODEL_SERVES:
+        lines.append(f"  {serves:<22} {models_:<62} must separate from: {sep_from}")
     lines += ["", f"Full correlation matrix over all {rep['all']['n_conditions']} played items "
                   f"({rep['all']['n_pairs']} pairs); see rdm_correlations.png"]
     return "\n".join(lines)

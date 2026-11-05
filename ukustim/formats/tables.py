@@ -1,8 +1,10 @@
 """
 tables.py
 =============================
-Note table and item table (build spec section 7), written as CSV.
-The assignment table is filled later (per participant) and is not produced here.
+Note table and item table (build spec section 7), written as CSV, plus an empty assignment-table template
+(one row per item; copied per participant and filled later). withheld_alternate (build spec v1.7) is 0 for
+alternate-fingering items and blank for every other item; set it to 1 for alternates held back for the
+new-fingering test (checklist item 17).
 """
 
 import csv
@@ -23,6 +25,8 @@ NOTE_COLUMNS = ["item_id", "note_index", "pitch", "pitch_name", "string", "fret"
 ITEM_COLUMNS = ["item_id", "family_id", "layer", "variant_type", "key", "base_item_id", "misaligned_composition",
                 "degree_of_misalignment", "prop_trained_musical", "prop_trained_motor_misaligned",
                 "prop_trained_motor_aligned", "recombination_type", "musical_chunk_ids", "listen_only"]
+ASSIGNMENT_COLUMNS = ["participant_id", "item_id", "family_id", "variant_type", "chunking_version", "design_group",
+                      "difficulty_band", "intro_week_listening", "intro_week_playing", "withheld_alternate"]
 
 
 def _motor_ids_per_note(item: Item, comp, mode: str = "full") -> List[str]:
@@ -75,6 +79,13 @@ def item_row(item: Item, trained: Trained) -> Dict:
                 musical_chunk_ids="|".join(item.chunk_ids), listen_only=int(not item.played))
 
 
+def assignment_row(item: Item) -> Dict:
+    return dict(participant_id="", item_id=item.item_id, family_id=item.family_id, variant_type=item.variant_type,
+                chunking_version="", design_group="listen-only" if not item.played else "", difficulty_band="",
+                intro_week_listening="", intro_week_playing="",
+                withheld_alternate=0 if item.variant_type == "alternate fingering" else "")
+
+
 def write_tables(items: Sequence[Item], outdir: str) -> None:
     os.makedirs(outdir, exist_ok=True)
     trained = Trained(items)
@@ -88,3 +99,8 @@ def write_tables(items: Sequence[Item], outdir: str) -> None:
         w.writeheader()
         for it in items:
             w.writerow(item_row(it, trained))
+    with open(os.path.join(outdir, "assignment_template.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, ASSIGNMENT_COLUMNS)
+        w.writeheader()
+        for it in items:
+            w.writerow(assignment_row(it))

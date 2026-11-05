@@ -20,6 +20,19 @@ Identity models (0 = same, 1 = different):
   movement_identity          same fret, finger and relative string pattern (Q8); a string-pair shift shares it
 Graded:
   movement_graded            1 - share of positions with the same (fret, finger, string step)
+Single motor features (M-IV collinearity reports, build spec section 8):
+  finger, fret, string       per-note left-hand finger / fret / string (count models)
+Auditory features (A-IV, split into concrete / relational / tonal; build spec section 8):
+  interval_size              per-transition |interval| (count model)
+  musical_boundary           (boundary 1-3, |boundary interval|): the boundary-cue profile (count model)
+Combination components (C-VIII), from graded similarities between items i and j:
+  s_sound  = share of the 12 positions with the same absolute pitch
+  s_move   = share of positions with the same (fret, finger, relative string step)
+  s_struct = share of the 11 intervals that match
+  comb_sound = 1 - s_sound, comb_movement = 1 - s_move, comb_structure = 1 - s_struct,
+  comb_interaction = 1 - share of positions where pitch AND movement match (multiplicative model),
+  comb_interaction_product = 1 - s_sound * s_move (alternative form, exported for comparison)
+Auditory models (AUDITORY_MODELS) need no fingering, so they can also be computed over listen-only items.
 """
 
 from collections import Counter
@@ -36,12 +49,39 @@ from ukustim.core.items import Item
 
 COUNT_MODELS = ["motor_elements", "motor_chunk_aligned_full", "motor_chunk_misal_full", "motor_chunk_aligned_lh",
                 "motor_chunk_misal_lh", "motor_chunk_crossing_lh", "musical_chunk", "abstract_chunk",
-                "abs_pitch", "intervals", "contour", "scale_degree", "nuis_phrase_position", "nuis_beat_degree"]
+                "abs_pitch", "intervals", "contour", "scale_degree", "nuis_phrase_position", "nuis_beat_degree",
+                "finger", "fret", "string", "interval_size", "musical_boundary"]
 IDENTITY_MODELS = ["concrete_sound", "abstract_structure", "movement_identity"]
-GRADED_MODELS = ["movement_graded"]
+COMBINATION_MODELS = ["comb_sound", "comb_movement", "comb_interaction", "comb_interaction_product", "comb_structure"]
+GRADED_MODELS = ["movement_graded"] + COMBINATION_MODELS
 MODELS = COUNT_MODELS + IDENTITY_MODELS + GRADED_MODELS
 
 NUISANCE_MODELS = ["scale_degree", "nuis_phrase_position", "nuis_beat_degree"]
+# C-VIII components whose collinearity is reported (build spec section 8); the product form is the alternative
+C8_COMPONENTS = ["comb_sound", "comb_movement", "comb_interaction", "comb_structure"]
+C8_COMPONENTS_PRODUCT = ["comb_sound", "comb_movement", "comb_interaction_product", "comb_structure"]
+# A-IV split of the auditory feature models
+AUDITORY_GROUPS = {"concrete": ["abs_pitch", "concrete_sound"],
+                   "relational": ["intervals", "contour", "interval_size", "abstract_structure", "abstract_chunk"],
+                   "tonal": ["scale_degree"]}
+AUDITORY_MODELS = {"musical_chunk", "abstract_chunk", "abs_pitch", "intervals", "contour", "scale_degree",
+                   "nuis_phrase_position", "nuis_beat_degree", "interval_size", "musical_boundary",
+                   "concrete_sound", "abstract_structure", "comb_sound", "comb_structure"}
+
+# Build spec section 8a: which research questions a model serves and what it must separate from
+MODEL_SERVES = [
+    ("motor_elements, finger, fret, string", "M-II, M-IV", "concrete sound (as far as first position allows; report)"),
+    ("movement_identity, movement_graded", "M-IV, C-IV, C-VII", "concrete sound, abstract structure"),
+    ("concrete_sound, abs_pitch", "A-IV, C-IV, C-VII", "movement, abstract structure"),
+    ("intervals, contour, interval_size (relational); scale_degree (tonal)", "A-IV", "concrete sound (via transposed items; report)"),
+    ("abstract_structure, abstract_chunk", "C-IV, C-VIII", "concrete sound, movement"),
+    ("comb_sound, comb_movement, comb_interaction, comb_structure", "C-VIII", "each other (variance inflation)"),
+    ("musical_chunk", "A-III, C-III, C-VIII", "motor chunks (misaligned), sequence, nuisance"),
+    ("motor_chunk_{aligned,misal}_{full,lh}", "M-III, C-III, C-VIII", "musical chunks, sequence, nuisance"),
+    ("concrete_sound / movement_identity as sequence identity", "III (all domains)", "chunk models"),
+    ("prop_trained_* (item table)", "III (all domains), C-IX", "-"),
+    ("scale_degree, nuis_phrase_position, nuis_beat_degree", "all levels", "- (chunk models must not be explained by them)"),
+]
 
 
 def _comp(item: Item):
@@ -82,6 +122,16 @@ def count_units(item: Item, model: str) -> Counter:
         return Counter((i // n, item.chunk_ids[i // n]) for i in range(config.N_NOTES))
     if model == "nuis_beat_degree":
         return Counter((i % config.BEATS_PER_BAR, d) for i, d in enumerate(degrees))
+    if model == "finger":
+        return Counter(p.finger for p in pos)
+    if model == "fret":
+        return Counter(p.fret for p in pos)
+    if model == "string":
+        return Counter(p.string for p in pos)
+    if model == "interval_size":
+        return Counter(abs(x) for x in iv)
+    if model == "musical_boundary":
+        return Counter((k, abs(iv[t - 1])) for k, t in enumerate(sorted(vs.musical_boundaries())))
     raise KeyError(model)
 
 
@@ -108,18 +158,50 @@ def _identity_rdm(keys_: Sequence) -> np.ndarray:
     return np.array([[0.0 if keys_[i] == keys_[j] else 1.0 for j in range(n)] for i in range(n)])
 
 
-def model_rdms(items: Sequence[Item], names: Optional[Sequence[str]] = None) -> Dict[str, np.ndarray]:
-    """RDMs of the played items among `items` (listen-only items have no motor information and are skipped)."""
-    played = [i for i in items if i.played]
+def _share(xs, ys) -> float:
+    return sum(a == b for a, b in zip(xs, ys)) / len(xs)
+
+
+def _graded_rdm(items: Sequence[Item], model: str) -> np.ndarray:
+    n = len(items)
+    pit = [i.pitches for i in items]
+    ivs = [tuple(b - a for a, b in zip(p, p[1:])) for p in pit]
+    mov = [_move_tokens(i) if i.played else None for i in items]
+    M = np.zeros((n, n))
+    for a in range(n):
+        for b in range(a + 1, n):
+            if model in ("movement_graded", "comb_movement"):
+                d = 1 - _share(mov[a], mov[b])
+            elif model == "comb_sound":
+                d = 1 - _share(pit[a], pit[b])
+            elif model == "comb_structure":
+                d = 1 - _share(ivs[a], ivs[b])
+            elif model == "comb_interaction":
+                d = 1 - sum(pa == pb and ma == mb for pa, pb, ma, mb in zip(pit[a], pit[b], mov[a], mov[b])) / config.N_NOTES
+            elif model == "comb_interaction_product":
+                d = 1 - _share(pit[a], pit[b]) * _share(mov[a], mov[b])
+            else:
+                raise KeyError(model)
+            M[a, b] = M[b, a] = d
+    return M
+
+
+def model_rdms(items: Sequence[Item], names: Optional[Sequence[str]] = None,
+               include_listen_only: bool = False) -> Dict[str, np.ndarray]:
+    """RDMs of the played items among `items` (listen-only items have no motor information and are skipped).
+    include_listen_only=True keeps listen-only items too; then only AUDITORY_MODELS may be asked for."""
+    use = list(items) if include_listen_only else [i for i in items if i.played]
+    names = list(names or MODELS)
+    if include_listen_only:
+        bad = [m for m in names if m not in AUDITORY_MODELS]
+        if bad:
+            raise ValueError(f"models {bad} need a fingering; listen-only items cannot be included")
     out = {}
-    for m in (names or MODELS):
+    for m in names:
         if m in COUNT_MODELS:
-            out[m] = _cosine_rdm([count_units(i, m) for i in played])
+            out[m] = _cosine_rdm([count_units(i, m) for i in use])
         elif m in IDENTITY_MODELS:
-            out[m] = _identity_rdm([identity_key(i, m) for i in played])
+            out[m] = _identity_rdm([identity_key(i, m) for i in use])
         else:
-            toks = [_move_tokens(i) for i in played]
-            n = len(played)
-            out[m] = np.array([[1 - sum(a == b for a, b in zip(toks[i], toks[j])) / config.N_NOTES
-                                for j in range(n)] for i in range(n)])
+            out[m] = _graded_rdm(use, m)
     return out

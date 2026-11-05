@@ -1,4 +1,4 @@
-# Controlled ukulele stimuli: pipeline v2 (build spec v1.6)
+# Controlled ukulele stimuli: pipeline v2 (build spec v1.7)
 
 Python 3 with numpy, scipy, matplotlib and Pillow (mido and LilyPond only for tests and cue images).
 `legacy/` holds the retired random pipeline. Rationale and design live in the shared project docs
@@ -29,13 +29,17 @@ ukustim/                   the package
     assemble.py            solution -> full item list
     solution.py  reference.py
   analysis/                is the set analysable?
-    models.py  separability.py   model RDMs, E1 / E2 / nuisance correlations, objective
-    difficulty.py                draft difficulty metric
+    models.py                    model RDMs (chunk, three-level, C-VIII combination, M-IV / A-IV feature, nuisance)
+                                 and the model -> research-question table (spec 8a)
+    separability.py              E1 / E2 / nuisance correlations, C-VIII collinearity (VIF), descriptive M-IV / A-IV
+                                 reports, objective
+    variety.py  difficulty.py    composition / position variety; draft difficulty metric
   formats/                 files going out and coming in
     loader.py  tables.py  tab.py  midi.py  export.py  cues.py
   chords/                  placeholder for the chord strand (not wired; build spec section 11)
 tests/                     python tests/run_all.py
-examples/                  hand-built input sets and sample cue images
+examples/                  input sets found by the search (G and D transposition) and sample cue images
+docs/                      CHANGELOG, pipeline walkthrough (+ walkthrough_trace.py), example reports and search summaries
 output/                    generated (not versioned)
 ```
 
@@ -70,8 +74,10 @@ Alternate fingerings, string-pair shifts, played transpositions and probes are g
 
 ## Outputs per set (output/<set>/)
 
-`report.txt` (checks, difficulty, separability E1 / E2 / nuisance), `rdm_correlations.png`, `note_table.csv`,
-`item_table.csv` (with key, trained proportions, recombination type), `stimuli/<item>.txt` (tab), `.mid` (90 bpm, 3/4) and
+`report.txt` (checks, difficulty, variety, separability E1 / E2 / nuisance, C-VIII collinearity, M-IV / A-IV reports,
+model -> research-question table), `rdm_correlations.png`, `note_table.csv`, `item_table.csv` (with key, trained
+proportions, recombination type), `assignment_template.csv` (per participant, filled later; withheld_alternate),
+`stimuli/<item>.txt` (tab), `.mid` (90 bpm, 3/4) and
 `_click.mid` (accent on beat 1), `cues/participant/<item>.ly` and `cues/researcher/<item>.ly`.
 
 ## Tab cues (LilyPond)
@@ -94,3 +100,7 @@ Missing: see claude/tab-rendering-options.md, section 6.
   model counts as |r| = 1 in the score (no evidence of separability).
 - Difficulty z-scores use a random sample of 1500 valid bases at the configured degree as reference.
 - Accent probe: loud on the first note of each motor chunk of the base's misaligned composition.
+- Alternate choice per chunk: maximise the number of bases with an alternate item, then the number of moved notes (Q4).
+- C-VIII collinearity: each component regressed on the others on ranks; "threshold as for |r|" read as multiple R < 0.3
+  (VIF < 1.10). Report only unless `E2_INCLUDES_C8 = True` (Q16).
+- `musical_boundary` model = (boundary 1-3, |boundary interval|); A-IV reports include listen-only probes (Q17).

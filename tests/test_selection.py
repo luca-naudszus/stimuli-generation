@@ -30,6 +30,41 @@ def run():
         expect("evaluation builds the family and a finite objective", 0 <= ev.objective <= 1.3 and len(ev.items) > 8)
         nb = osr.neighbours(inv, cands, sols[-1], rng, 6, n=3)
         expect("neighbour moves stay feasible", all(osr.feasible(inv, x) for x in nb))
+    # alternate choice: ties go to MORE moved notes (Q4); exact when every combination is tried
+    import itertools
+    from ukustim.core.items import ChunkDef, build_item
+    from ukustim.family.alternate import alternate_item
+    from ukustim.selection.assemble import _choose_alternates
+    fx = fixture()
+    movable = [(c, [o for j, o in enumerate(fx.inv.opts[c]) if j != fx.sol.fingering[c]]) for c in fx.sol.chunks]
+    movable = [(c, a) for c, a in movable if a]
+    n_combos = 1
+    for _, a in movable:
+        n_combos *= len(a) + 1
+
+    def score(reg):
+        n_ok = moved = 0
+        for bi, (t, comp) in enumerate(fx.sol.bases):
+            b = build_item("B", "F", "family", "base", [ch.chunk_id(c) for c in t], reg, comp)
+            alt = alternate_item(b, reg)
+            if alt:
+                n_ok += 1
+                moved += sum(x != y for x, y in zip(b.positions, alt.positions))
+        return n_ok, moved
+    if n_combos <= 5000:
+        best = None
+        for combo in itertools.product(*[range(len(a) + 1) for _, a in movable]):
+            reg = {ch.chunk_id(c): ChunkDef(ch.chunk_id(c), c, fx.inv.opts[c][fx.sol.fingering[c]].positions, None)
+                   for c in fx.sol.chunks}
+            for (c, a), j in zip(movable, combo):
+                if j:
+                    reg[ch.chunk_id(c)].alt = a[j - 1].positions
+            sc = score(reg)
+            best = sc if best is None or sc > best else best
+        expect("alternate choice maximises bases with an alternate, then moved notes",
+               score(_choose_alternates(fx.inv, fx.sol, random.Random(0), combos_max=n_combos)) == best)
+    else:
+        print(f"SKIP alternate tie-break test ({n_combos} combinations > 5000)")
     # penalties
     notes = ["B1: no valid alternate fingering", "B2: played transposition to G impossible (x)", "recombined item of type motor-only: none found"]
     expect("missing-member penalties", abs(osr.missing_penalty(notes, 4) - (0.15 + 0.1 / 4 + 0.05)) < 1e-9)

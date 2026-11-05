@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.helpers import FAILED  # noqa: E402
 
-MODULES = ["test_core", "test_checks", "test_family", "test_selection", "test_analysis", "test_formats", "test_cli"]
+MODULES = ["test_core", "test_checks", "test_family", "test_selection", "test_analysis", "test_combination", "test_formats", "test_cli"]
 
 
 def main():

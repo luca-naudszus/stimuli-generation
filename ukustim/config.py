@@ -1,7 +1,7 @@
 """
 config.py
 =============================
-All parameters of the controlled-stimulus pipeline (build spec v1.6).
+All parameters of the controlled-stimulus pipeline (build spec v1.7).
 Change values here; nothing else is hard-coded. Modules read these values at call time, so a script or a test
 can also set them (config.MISALIGNMENT_DEGREE = 3).
 """
@@ -69,6 +69,8 @@ N_TRAINED_CHUNKS = 6         # trained musical chunks of the prototype set
 SEARCH_TRIALS = 3000         # tries per degree (random / exhaustive-triple search)
 SEARCH_BUDGET_S = 60         # objective-driven search: seconds per (degree, number of bases)
 RDM_THRESHOLD = 0.3          # |r| below this counts as separable
+E2_INCLUDES_C8 = False       # the E2 score (and so the search objective) also counts the largest multiple R of the
+                             # C-VIII components (sound, movement, interaction, structure); False (default) = report only (Q16)
 
 # ---------------------------------------------------------------------------
 # Probes (listen-only; section 5, types are parameters)

@@ -25,7 +25,8 @@ from ukustim.selection.solution import Solution
 
 def _choose_alternates(inv: Inventory, sol: Solution, rng: random.Random, combos_max: int = 400):
     """Pick one alternate fingering per chunk (or none) so that as many bases as possible get a valid
-    alternate item. Returns (registry, alt_items_by_base)."""
+    alternate item; ties go to the choice that moves MORE notes in the alternate items (build spec section 5, Q4:
+    "as many as neutrality and the band allow"). Returns the registry."""
     reg: Registry = {}
     movable = []
     for c in sol.chunks:
@@ -43,14 +44,14 @@ def _choose_alternates(inv: Inventory, sol: Solution, rng: random.Random, combos
         for (c, alts), j in zip(movable, combo):
             if j > 0:
                 r2[ch.chunk_id(c)].alt = alts[j - 1].positions
-        n_ok, alt_items = 0, {}
+        n_ok, moved_items = 0, 0
         for bi, (t, comp) in enumerate(sol.bases):
             base = build_item(f"B{bi + 1}", f"F{bi + 1}", "family", "base", [ch.chunk_id(c) for c in t], r2, comp)
             a = alternate_item(base, r2)
             if a is not None:
                 n_ok += 1
-        moved_total = sum(v.moved_notes() for v in r2.values())
-        score = (n_ok, -moved_total)
+                moved_items += sum(x != y for x, y in zip(base.positions, a.positions))
+        score = (n_ok, moved_items)
         if best_score is None or score > best_score:
             best_score, best_reg = score, r2
     return best_reg if best_reg is not None else reg

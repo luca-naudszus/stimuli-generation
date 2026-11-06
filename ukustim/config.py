@@ -2,7 +2,9 @@
 config.py
 =============================
 All parameters of the controlled-stimulus pipeline (build spec v1.7).
-Change values here; nothing else is hard-coded. Modules read these values at call time, so a script or a test
+Change values here. 
+
+Modules read these values at call time, so a script or a test
 can also set them (config.MISALIGNMENT_DEGREE = 3).
 """
 
@@ -33,11 +35,12 @@ LEAP_MIN = 3                 # leap cue: |boundary interval| >= LEAP_MIN and > e
 LEAP_MAX = 7                 # maximum leap
 ALLOW_LEAP_CUE = True
 ALLOW_DIRECTION_CUE = True   # direction change; requires monotonic neighbouring chunks
+
 # Within-chunk intervals must stay below LEAP_MIN (no competing cue); consecutive repeats are forbidden.
 ALLOW_CHUNK_REPEAT_IN_ITEM = False   # the same musical chunk twice in one item (implementation choice)
+
 # Turning points inside chunks (build spec v1.4, Q9). 'forbid' = only the 12 monotonic stepwise chunks (prototype).
-# 'allow' = X-Y-X chunks are valid again, but at most MAX_TURNING_SHARE of the trained chunks of a set (fallback
-# for the prototype: at most 2 of 6; final set: at most one third).
+# 'allow' = X-Y-X chunks are valid again, but at most MAX_TURNING_SHARE of the trained chunks of a set
 TURNING_POINT_CHUNKS = "forbid"
 MAX_TURNING_SHARE = 1 / 3
 

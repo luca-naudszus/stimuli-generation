@@ -7,6 +7,10 @@ can show what was tested, not only what failed.
 Item-level: 1 (frets / strings), 2 (neutrality), 3 (boundary cues), 5 (alternate), 6 (shift),
             7 (played transposition), 8 (metre).
 Set-level : 4 (recurrence, fingering consistency, share of turning-point chunks).
+
+The checks are written independently of the builders in family/ and selection/: they recompute everything from the
+finished items (positions, pitches, chunk IDs, composition), so a bug in a builder shows up here. Item numbers in the
+messages are 1-based (note 1..12). Entry point: validate_set(items) -> list of Result; summarize() for the report.
 """
 
 from dataclasses import dataclass
@@ -24,7 +28,8 @@ from ukustim.core.ukulele_geometry import OPEN_STRING_MIDI, STRING_ORDER
 
 @dataclass
 class Result:
-    check: str          # '1' .. '6', or 'S' for structure
+    """One test outcome. Passed tests are kept too, so the report can count what was checked."""
+    check: str          # '1' .. '8', or 'S' for structure
     item_id: str
     passed: bool
     message: str = ""
@@ -34,6 +39,7 @@ class Result:
 
 
 def _r(check, item, ok, msg_ok="", msg_fail=""):
+    """Result with the message that matches the outcome."""
     return Result(check, item.item_id if hasattr(item, "item_id") else str(item), ok, msg_ok if ok else msg_fail)
 
 
@@ -42,6 +48,7 @@ def _r(check, item, ok, msg_ok="", msg_fail=""):
 # ---------------------------------------------------------------------------
 
 def check_structure(item: Item) -> List[Result]:
+    """12 notes in 4 chunk IDs; the composition (if any) uses parts of 2 and 3 that sum to 12."""
     out = []
     ok = len(item.pitches) == config.N_NOTES and len(item.chunk_ids) == config.N_CHUNKS
     out.append(_r("S", item, ok, f"{config.N_NOTES} notes in {config.N_CHUNKS} chunks",
@@ -54,6 +61,8 @@ def check_structure(item: Item) -> List[Result]:
 
 
 def check_1_frets_strings(item: Item) -> List[Result]:
+    """Check 1: frets within 0..FRET_MAX; string + fret gives the stored pitch; at most MAX_STRING_SPAN adjacent
+    strings; finger 0 exactly on open strings. Listen-only items have no positions and are skipped."""
     if not item.played:
         return []
     out = []
@@ -79,6 +88,8 @@ def check_1_frets_strings(item: Item) -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def check_2_neutrality(item: Item) -> List[Result]:
+    """Check 2: the misaligned composition differs from 3-3-3-3, and no string crossing falls in M delta B
+    (core/versions.forbidden_crossings). The message lists the crossings and the forbidden transitions."""
     if not item.played:
         return []
     if not item.composition:
@@ -100,6 +111,9 @@ def check_2_neutrality(item: Item) -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def check_3_cues(item: Item) -> List[Result]:
+    """Check 3: every musical chunk obeys the within-chunk rules and every musical boundary (3, 6, 9) has a cue.
+    Skipped for string-pair shifts (their pitches change by construction, the spec does not require cues there)
+    and for probes (listen-only transformations of the base)."""
     if item.variant_type in ("string-pair shift",) or item.variant_type.startswith("probe"):
         return []
     out = []
@@ -121,6 +135,9 @@ def check_3_cues(item: Item) -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def check_5_alternate(item: Item, base: Optional[Item]) -> List[Result]:
+    """Check 5 (alternate item against its base): same pitches; >= ALT_MIN_NOTES_MOVED notes moved in
+    >= ALT_MIN_CHUNKS chunks; only notes with a second position moved; chunk IDs and composition unchanged.
+    The 'same alternate wherever a chunk appears' part is in check_4_recurrence (it needs the whole set)."""
     if item.variant_type != "alternate fingering":
         return []
     if base is None:
@@ -148,6 +165,8 @@ def check_5_alternate(item: Item, base: Optional[Item]) -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def check_6_shift(item: Item, base: Optional[Item]) -> List[Result]:
+    """Check 6 (shift against its base): same frets, same fingers, same relative string pattern (= same movement,
+    Q8), every note moved by the same single string step, pitches consistent with the new strings."""
     if item.variant_type != "string-pair shift":
         return []
     if base is None:
@@ -196,6 +215,9 @@ def check_7_transposition(item: Item, base: Optional[Item]) -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def check_8_metre(item: Item) -> List[Result]:
+    """Check 8: every musical chunk starts on beat 1 (0-based onsets 0, 3, 6, 9 with BEATS_PER_BAR = 3).
+    With isochronous notes this depends only on CHUNK_LEN and BEATS_PER_BAR, so it guards the configuration rather
+    than the item (it fails for every item if, e.g., BEATS_PER_BAR is set to 4)."""
     starts = [config.CHUNK_LEN * i for i in range(config.N_CHUNKS)]
     beats = [(i % config.BEATS_PER_BAR) + 1 for i in starts]
     ok = all(b == 1 for b in beats)
@@ -208,6 +230,8 @@ def check_8_metre(item: Item) -> List[Result]:
 # ---------------------------------------------------------------------------
 
 def validate_item(item: Item, items_by_id: Dict[str, Item]) -> List[Result]:
+    """All item-level checks. Checks 5-7 compare a family member with its base (looked up by base_item_id);
+    each returns [] for items of other types."""
     base = items_by_id.get(item.base_item_id)
     return (check_structure(item) + check_1_frets_strings(item) + check_2_neutrality(item)
             + check_3_cues(item) + check_5_alternate(item, base) + check_6_shift(item, base)
@@ -256,7 +280,8 @@ def check_4_recurrence(items: Sequence[Item]) -> List[Result]:
                 if cid in alt_seen and alt_seen[cid] != pos:
                     out.append(Result("5", it.item_id, False, f"chunk {cid}: alternate fingering differs between alternate items"))
                 alt_seen.setdefault(cid, pos)
-    # minimum rule for crossing motor chunks (misaligned version)
+    # minimum rule for crossing motor chunks (misaligned version): each base needs a crossing motor chunk ('full'
+    # identity) that occurs in at least one other base, as any of its motor chunks
     crossing = {b.item_id: vs.crossing_motor_ids(b.positions, b.composition) for b in bases}
     all_motor = {b.item_id: {m for _, _, m in vs.motor_chunks(b.positions, b.composition)} for b in bases}
     for b in bases:
@@ -269,6 +294,7 @@ def check_4_recurrence(items: Sequence[Item]) -> List[Result]:
 
 
 def validate_set(items: Sequence[Item]) -> List[Result]:
+    """Every item-level check for every item, then the set-level check 4. Used by report_set (search and check)."""
     by_id = {i.item_id: i for i in items}
     out: List[Result] = []
     for it in items:
@@ -278,6 +304,7 @@ def validate_set(items: Sequence[Item]) -> List[Result]:
 
 
 def summarize(results: Sequence[Result]) -> str:
+    """'N checks, M failed' plus one line per failure (passed checks are only counted)."""
     fails = [r for r in results if not r.passed]
     lines = [f"{len(results)} checks, {len(fails)} failed"]
     lines += [str(r) for r in fails]

@@ -4,6 +4,14 @@ exact_cover.py
 Set search for the minimal case (3 bases, 6 trained chunks, every chunk in exactly 2 bases):
 random chunk subsets (find_sets) and exhaustive enumeration of exact-cover triples (find_sets_exhaustive).
 The objective-driven search for 3-6 bases is in objective_search.py.
+
+Used by `python main.py search --exact`. Two parts:
+  - random search (find_sets): grow a connected subset of 6 chunks, list the chunk orders inside it, sample triples
+    of orders that use every chunk at least twice, then look for a fingering and compositions (_try_cover);
+  - exhaustive search (find_sets_exhaustive): list EVERY triple of valid orders that covers 6 chunks exactly twice
+    (exact_triples), then test each with _try_cover.
+_try_cover is the shared feasibility test: one fingering per chunk for the whole set, a neutral misaligned
+composition for every base, and the minimum recurrence rule (_share_ok).
 """
 
 import itertools
@@ -25,6 +33,8 @@ Chunk = Tuple[int, ...]
 # ---------------------------------------------------------------------------
 
 def _grow_subset(inv: Inventory, rng: random.Random, size: int) -> List[Chunk]:
+    """Random set of `size` chunks that is connected in the junction graph: start anywhere, then repeatedly add a
+    chunk that can follow or precede one already chosen. [] if the subset cannot grow."""
     start = rng.choice(inv.chunks)
     P = [start]
     while len(P) < size:
@@ -36,6 +46,8 @@ def _grow_subset(inv: Inventory, rng: random.Random, size: int) -> List[Chunk]:
 
 
 def _orders_within(inv: Inventory, P: Sequence[Chunk]) -> List[Tuple[Chunk, ...]]:
+    """All chunk orders that use only chunks of P (same depth-first walk as chunks.enumerate_chunk_tuples,
+    restricted to P)."""
     Pset = set(P)
     out = []
 
@@ -70,6 +82,9 @@ def _covers(orders, P, n_bases, rng, cap=300):
 
 
 def _share_ok(motor_ids: List[set], crossing_ids: List[set]) -> bool:
+    """Minimum recurrence rule (build spec section 3): every base i has at least one CROSSING motor chunk that also
+    occurs (as any motor chunk) in another base. motor_ids[i] / crossing_ids[i] = 'full' motor chunk IDs of base i.
+    Also used by objective_search.feasible."""
     for i in range(len(motor_ids)):
         others = set().union(*[motor_ids[j] for j in range(len(motor_ids)) if j != i])
         if not (crossing_ids[i] & others):
@@ -78,6 +93,11 @@ def _share_ok(motor_ids: List[set], crossing_ids: List[set]) -> bool:
 
 
 def _try_cover(inv: Inventory, combo, P, deg, rng) -> Optional[Solution]:
+    """Can these chunk orders (combo) form a set? Looks for
+      1. one fingering option per chunk of P (the same in every base), lowest frets tried first (at most 200);
+      2. for every base, the misaligned compositions of degree `deg` that are neutral with that fingering;
+      3. one composition per base such that the minimum recurrence rule holds (at most 200 combinations).
+    Returns the first Solution found, or None."""
     if not turning_cap_ok(P):
         return None
     comps = vs.misaligned_compositions(deg)
@@ -87,8 +107,8 @@ def _try_cover(inv: Inventory, combo, P, deg, rng) -> Optional[Solution]:
     rng.shuffle(prod)
     prod.sort(key=lambda a: sum(1 for x in a if x))      # prefer the default (lowest-fret) fingering; stable after shuffle
     for assign in prod[:200]:
-        f = dict(zip(P, assign))
-        per_base = []
+        f = dict(zip(P, assign))                          # chunk -> option index, for the whole set
+        per_base = []                                     # neutral compositions per base under this fingering
         for t in combo:
             good = []
             for comp in comps:
@@ -96,9 +116,9 @@ def _try_cover(inv: Inventory, combo, P, deg, rng) -> Optional[Solution]:
                 if a is not None:
                     good.append(comp)
             if not good:
-                break
+                break                                     # this base cannot be fingered this way: next fingering
             per_base.append(good)
-        else:
+        else:                                             # (for-else) every base has at least one composition
             choices = list(itertools.product(*per_base))
             rng.shuffle(choices)
             for pick in choices[:200]:
@@ -115,6 +135,8 @@ def _try_cover(inv: Inventory, combo, P, deg, rng) -> Optional[Solution]:
 def find_sets(inv: Inventory, deg: int, trials: Optional[int] = None, seed: Optional[int] = None,
               n_bases: Optional[int] = None, n_trained: Optional[int] = None,
               want: int = 10) -> Tuple[List[Solution], Dict]:
+    """Random search for sets of n_bases bases over n_trained chunks (see module docstring). Returns up to `want`
+    solutions and counters of why subsets failed. Kept for comparison; the CLI uses the exhaustive version."""
     trials = config.SEARCH_TRIALS if trials is None else trials
     rng = random.Random(config.SEED if seed is None else seed)
     n_bases = config.N_BASES if n_bases is None else n_bases
@@ -156,6 +178,7 @@ def find_sets(inv: Inventory, deg: int, trials: Optional[int] = None, seed: Opti
 # ---------------------------------------------------------------------------
 
 def valid_orders(inv: Inventory, deg: int) -> List[Tuple[Chunk, ...]]:
+    """Chunk orders that have at least one valid base (some composition of degree `deg` with a neutral fingering)."""
     comps = vs.misaligned_compositions(deg)
     out = []
     for t in inv.tuples:
@@ -165,7 +188,13 @@ def valid_orders(inv: Inventory, deg: int) -> List[Tuple[Chunk, ...]]:
 
 
 def exact_triples(orders: Sequence[Tuple[Chunk, ...]]) -> List[Tuple[Tuple[Chunk, ...], ...]]:
-    """All unordered triples of chunk orders A, B, C with |A u B u C| = 6 and every chunk in exactly two of them."""
+    """All unordered triples of chunk orders A, B, C with |A u B u C| = 6 and every chunk in exactly two of them.
+
+    Logic: each order has 4 distinct chunks, so 3 orders contain 12 chunk slots; 6 chunks used exactly twice each
+    fill them. If A and B share exactly 2 chunks, those 2 are used twice already and the other 4 (A delta B) once, so
+    C must consist of exactly A delta B. The code therefore indexes orders by their chunk SET (by_set) and by every
+    chunk PAIR they contain (by_pair): for each order A, find orders B sharing exactly 2 chunks through the pair index,
+    then look up C as the order(s) whose chunk set is A delta B. i < j < k avoids listing a triple twice."""
     idx = {o: i for i, o in enumerate(orders)}
     sets = [frozenset(o) for o in orders]
     by_set: Dict[frozenset, List[int]] = {}
@@ -190,7 +219,8 @@ def exact_triples(orders: Sequence[Tuple[Chunk, ...]]) -> List[Tuple[Tuple[Chunk
 
 def find_sets_exhaustive(inv: Inventory, deg: int, max_tries: int = 3000, want: int = 15,
                          seed: int = 0) -> Tuple[List[Solution], Dict]:
-    """Enumerate all exact-cover triples of valid chunk orders, then test fingering / composition / sharing."""
+    """Enumerate all exact-cover triples of valid chunk orders, then test fingering / composition / sharing.
+    Degree 2: 3,811 triples, of which about 20 in 400 tried are feasible (pipeline-state.md section 4)."""
     rng = random.Random(config.SEED + 77 + seed)
     orders = valid_orders(inv, deg)
     triples = exact_triples(orders)

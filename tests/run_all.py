@@ -1,4 +1,5 @@
-"""Run every test module:  python tests/run_all.py   (from the pipeline folder)"""
+"""Run every test module:  python tests/run_all.py   (from the pipeline folder)
+Exit code 1 if any check failed. Modules run in order; later ones reuse the cached fixture of tests/helpers.py."""
 
 import importlib
 import os

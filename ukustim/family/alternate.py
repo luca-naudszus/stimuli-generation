@@ -2,6 +2,11 @@
 alternate.py
 =============================
 Alternate fingering (per musical chunk; build spec section 5): same pitches, a different movement.
+
+Each chunk has at most one alternate fingering, stored in the registry (ChunkDef.alt) and chosen per set by
+selection/assemble._choose_alternates. An alternate ITEM switches some of its chunks to their alternate fingering.
+Only notes with a second position can move (C major, first position: E4, G4, A4, B4), so most chunk alternates
+move one note.
 """
 
 import itertools
@@ -14,16 +19,23 @@ from ukustim.core.items import Item, Registry, build_item, structurally_ok
 def alternate_item(base: Item, registry: Registry) -> Optional[Item]:
     """Alternate item of a base: the alternate fingering of each chunk that has one, using the largest
     subset of chunks that keeps neutrality and the string span; needs >= ALT_MIN_CHUNKS chunks and
-    >= ALT_MIN_NOTES_MOVED moved notes. None if impossible."""
+    >= ALT_MIN_NOTES_MOVED moved notes. None if impossible.
+
+    Search order: subsets of the chunks that have an alternate, largest first (all 4, then 3, ... down to
+    ALT_MIN_CHUNKS). Within one size, the subset that moves the most notes wins (Q4: move as many notes as
+    neutrality allows). The first size with any valid subset ends the search. The musical chunk IDs and the
+    composition stay those of the base; only the positions change."""
+    # positions (0..3) of the base's chunks that have an alternate fingering in the registry
     with_alt = [i for i, cid in enumerate(base.chunk_ids)
                 if cid in registry and registry[cid].alt is not None]
-    for k in range(len(with_alt), config.ALT_MIN_CHUNKS - 1, -1):
+    for k in range(len(with_alt), config.ALT_MIN_CHUNKS - 1, -1):        # largest subsets first
         best = None
         for subset in itertools.combinations(with_alt, k):
-            flags = [i in subset for i in range(len(base.chunk_ids))]
+            flags = [i in subset for i in range(len(base.chunk_ids))]      # use_alt per chunk
             cand = build_item(f"{base.item_id}-alt", base.family_id, "family", "alternate fingering",
                               base.chunk_ids, registry, base.composition, flags, base.item_id, key=base.key)
             moved = sum(a != b for a, b in zip(base.positions, cand.positions))
+            # switching fingerings can move string crossings, so neutrality is tested again
             if moved >= config.ALT_MIN_NOTES_MOVED and structurally_ok(cand.positions, cand.composition):
                 if best is None or moved > best[0]:
                     best = (moved, cand)

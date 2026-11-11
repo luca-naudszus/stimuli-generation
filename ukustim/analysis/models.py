@@ -3,6 +3,14 @@ models.py
 =============================
 Model representational dissimilarity matrices (RDMs) over played items (build spec section 8).
 
+An RDM is an items x items matrix of predicted dissimilarities: entry (i, j) says how different a model expects
+items i and j to be (0 = identical). Each model is a hypothesis about what a brain region codes. The separability
+analysis (separability.py) then asks whether two models make different predictions over the item set. Three kinds:
+  - count models: each item becomes a bag of units (e.g. its 4 musical chunk IDs); the bag becomes a count vector,
+    normalised to length 1, and distance = 1 - cosine similarity. Order inside the item does not matter.
+  - identity models: 0 if two items have exactly the same key (e.g. the same pitch sequence), else 1.
+  - graded models: 1 - share of positions (note by note) that match on some feature.
+
 Count-vector models (cosine distance on unit counts):
   motor_elements             (string, fret, finger) of each note
   motor_chunk_{aligned,misal}_{full,lh}
@@ -85,6 +93,7 @@ MODEL_SERVES = [
 
 
 def _comp(item: Item):
+    """The item's misaligned composition (aligned 3-3-3-3 for items without one)."""
     return item.composition or vs.aligned_composition()
 
 
@@ -95,11 +104,15 @@ def _move_tokens(item: Item):
 
 
 def count_units(item: Item, model: str) -> Counter:
+    """The bag of units an item contributes to a count model (see the module docstring for each model).
+    Example for B1 and 'musical_chunk': Counter({'C4-D4-E4': 1, 'D4-E4-F4': 1, 'E4-F4-G4': 1, 'F4-G4-A4': 1}).
+    Motor models need positions; auditory models use only pitches, chunk IDs and the key."""
     pos, comp, n = item.positions, _comp(item), config.CHUNK_LEN
     iv = [b - a for a, b in zip(item.pitches, item.pitches[1:])]
     degrees = [keys.scale_degree(p, item.key) for p in item.pitches]
     if model == "motor_elements":
         return Counter((p.string, p.fret, p.finger) for p in pos)
+    # motor chunk models: the suffix after the last '_' is the identity mode ('full' or 'lh')
     if model.startswith("motor_chunk_aligned"):
         return Counter(m for _, _, m in vs.motor_chunks(pos, vs.aligned_composition(), model.rsplit("_", 1)[1]))
     if model in ("motor_chunk_misal_full", "motor_chunk_misal_lh"):
@@ -118,8 +131,10 @@ def count_units(item: Item, model: str) -> Counter:
         return Counter((x > 0) - (x < 0) for x in iv)
     if model == "scale_degree":
         return Counter(degrees)
+    # nuisance: which chunk sits at which position (1-4); recombination moves chunks to other positions
     if model == "nuis_phrase_position":
         return Counter((i // n, item.chunk_ids[i // n]) for i in range(config.N_NOTES))
+    # nuisance: which scale degree falls on which beat of the bar
     if model == "nuis_beat_degree":
         return Counter((i % config.BEATS_PER_BAR, d) for i, d in enumerate(degrees))
     if model == "finger":
@@ -130,12 +145,14 @@ def count_units(item: Item, model: str) -> Counter:
         return Counter(p.string for p in pos)
     if model == "interval_size":
         return Counter(abs(x) for x in iv)
+    # boundary-cue profile: interval size at boundary 1, 2, 3 (transitions 3, 6, 9; iv is 0-based, so iv[t - 1]) (Q17)
     if model == "musical_boundary":
         return Counter((k, abs(iv[t - 1])) for k, t in enumerate(sorted(vs.musical_boundaries())))
     raise KeyError(model)
 
 
 def identity_key(item: Item, model: str):
+    """What two items must share to count as identical under an identity model."""
     if model == "concrete_sound":
         return item.pitches
     if model == "abstract_structure":
@@ -146,23 +163,29 @@ def identity_key(item: Item, model: str):
 
 
 def _cosine_rdm(counters: Sequence[Counter]) -> np.ndarray:
+    """1 - cosine similarity between count vectors. Columns = every unit seen in any item (sorted for stability).
+    Clipped at 0 to remove tiny negative values from floating-point error."""
     ks = sorted({k for c in counters for k in c}, key=str)
     X = np.array([[c.get(k, 0) for k in ks] for c in counters], dtype=float)
     norm = np.linalg.norm(X, axis=1, keepdims=True)
-    X = X / np.where(norm == 0, 1, norm)
+    X = X / np.where(norm == 0, 1, norm)          # unit length (an empty bag stays zero)
     return np.clip(1 - X @ X.T, 0, None)
 
 
 def _identity_rdm(keys_: Sequence) -> np.ndarray:
+    """0 where the keys are equal, 1 elsewhere."""
     n = len(keys_)
     return np.array([[0.0 if keys_[i] == keys_[j] else 1.0 for j in range(n)] for i in range(n)])
 
 
 def _share(xs, ys) -> float:
+    """Share of positions where two equally long sequences agree."""
     return sum(a == b for a, b in zip(xs, ys)) / len(xs)
 
 
 def _graded_rdm(items: Sequence[Item], model: str) -> np.ndarray:
+    """Position-by-position models: movement_graded and the C-VIII combination components.
+    Movement tokens per note = (fret, finger, string step); pitch per note; interval per transition."""
     n = len(items)
     pit = [i.pitches for i in items]
     ivs = [tuple(b - a for a, b in zip(p, p[1:])) for p in pit]
@@ -177,6 +200,7 @@ def _graded_rdm(items: Sequence[Item], model: str) -> np.ndarray:
             elif model == "comb_structure":
                 d = 1 - _share(ivs[a], ivs[b])
             elif model == "comb_interaction":
+                # joint match: a position counts only if pitch AND movement match there
                 d = 1 - sum(pa == pb and ma == mb for pa, pb, ma, mb in zip(pit[a], pit[b], mov[a], mov[b])) / config.N_NOTES
             elif model == "comb_interaction_product":
                 d = 1 - _share(pit[a], pit[b]) * _share(mov[a], mov[b])

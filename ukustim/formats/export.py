@@ -15,6 +15,7 @@ from ukustim.formats.tab import tab_item
 
 
 def export_items(items: Sequence[Item], outdir: str) -> None:
+    """For every item: <id>.txt (tab), <id>.mid, and <id>_click.mid if EXPORT_CLICK_TRACK; plus all_tabs.txt."""
     os.makedirs(outdir, exist_ok=True)
     tabs = []
     for it in items:

@@ -13,6 +13,12 @@ from ukustim.core.items import Item
 
 
 def variety_report(items: Sequence[Item]) -> Dict:
+    """Counts over the bases only:
+      compositions                      how often each misaligned composition is used
+      chunk_positions / chunk_uses      at which positions (1-4) each trained chunk occurs, and in how many bases;
+                                        a chunk at several positions is cut into different motor chunks (Q7)
+      n_motor_chunks(_recurring)        distinct misaligned motor chunks ('full'), and how many occur in >= 2 bases
+      n_crossing_chunks(_recurring)     the same for crossing motor chunks (the ones that tie bases together)"""
     bases = [i for i in items if i.variant_type == "base" and i.played]
     comps = Counter(vs.comp_to_str(b.composition) for b in bases)
     positions = defaultdict(set)
@@ -36,6 +42,7 @@ def variety_report(items: Sequence[Item]) -> Dict:
 
 
 def format_variety(rep: Dict) -> str:
+    """The variety section of report.txt."""
     lines = ["Variety of the bases:",
              "  compositions: " + ", ".join(f"{c} x{n}" for c, n in rep["compositions"].items()),
              f"  trained chunks at more than one position: {rep['n_chunks_at_several_positions']} of {len(rep['chunk_positions'])}",

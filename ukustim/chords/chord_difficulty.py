@@ -1,13 +1,20 @@
 """
 chord_difficulty.py
 =============================
+Old chord difficulty code (from legacy/), kept for the chord strand (build spec section 11). NOT used by the melody
+pipeline. A chord shape is a dict string -> fret, e.g. {"G": 0, "C": 0, "E": 0, "A": 3} for C major (0003).
 
+Two measures, both as transparent raw components rather than one opaque number, so they can be checked against
+pilot data:
+  chord_difficulty           one chord on its own: fret span (mm), fingers needed, barre
+  chord_transition_distance  moving from chord A to chord B: hand shift, finger travel, barre change
 """
 
 from dataclasses import dataclass
 from typing import Dict
 from ukustim.core.ukulele_geometry import fret_position_mm, DEFAULT_SCALE_LENGTH_MM
 
+# weights of the chord difficulty score: per mm of span, per finger, for a barre (draft values)
 DEFAULT_WEIGHTS = dict(span=1.0, fingers=3.0, barre=8.0)
 
 @dataclass
@@ -26,10 +33,9 @@ class TransitionDistance:
 
 
 def is_barre(chord_shape: Dict[str, int]) -> bool:
-    """Heuristik: 3+ Saiten am selben nicht-leeren Bund -> Barre.
-    Caveat: markiert z.B. auch D (2-2-2-0) als Barre, obwohl das ueblicher-
-    weise mit 3 Einzelfingern gegriffen wird - vor produktivem Einsatz ggf.
-    verschaerfen (z.B. zusaetzlich Bund >= 3 verlangen)."""
+    """Heuristic: 3 or more strings pressed at the same (non-open) fret -> barre.
+    Caveat: this also marks D (2-2-2-0) as a barre, although it is usually played with three separate fingers;
+    tighten before real use (e.g. also require fret >= 3)."""
     frets = [f for f in chord_shape.values() if f > 0]
     if not frets:
         return False
@@ -38,8 +44,7 @@ def is_barre(chord_shape: Dict[str, int]) -> bool:
 
 
 def chord_span_mm(chord_shape: Dict[str, int], scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM) -> float:
-    """Physische Spannweite der Greifhand (mm) zwischen niedrigstem und
-    hoechstem gegriffenen (nicht-leeren) Bund."""
+    """Physical stretch of the fretting hand (mm) between the lowest and the highest pressed (non-open) fret."""
     fretted = [f for f in chord_shape.values() if f > 0]
     if not fretted:
         return 0.0
@@ -48,7 +53,7 @@ def chord_span_mm(chord_shape: Dict[str, int], scale_length_mm: float = DEFAULT_
 
 
 def num_fingers_required(chord_shape: Dict[str, int]) -> int:
-    """Grobe Schaetzung der benoetigten Finger (Barre zaehlt einmal)."""
+    """Rough estimate of the fingers needed (a barre counts as one finger)."""
     fretted = [f for f in chord_shape.values() if f > 0]
     if not fretted:
         return 0
@@ -64,9 +69,9 @@ def chord_difficulty(
     scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM,
     weights: Dict[str, float] = None,
 ) -> ChordDifficulty:
-    """Einzelgriff-Schwierigkeit (unabhaengig von Uebergaengen), transparente
-    Rohkomponenten statt Blackbox-Zahl - editierbar/validierbar gegen
-    Pilotdaten."""
+    """Difficulty of one chord shape on its own (independent of transitions): weighted sum of span (mm), number of
+    fingers and barre, returned together with the raw components so the weights can be edited and validated
+    against pilot data."""
     weights = weights or DEFAULT_WEIGHTS
     span = chord_span_mm(chord_shape, scale_length_mm)
     fingers = num_fingers_required(chord_shape)
@@ -84,9 +89,12 @@ def chord_transition_distance(
     scale_length_mm: float = DEFAULT_SCALE_LENGTH_MM,
     barre_change_penalty_mm: float = 15.0,
 ) -> TransitionDistance:
-    """Physische Uebergangsdistanz, angelehnt an die along/across-Zerlegung
-    aus dem Fretting-Transformer-Paper (difficulty = fret_stretch +
-    locality + vertical_stretch)."""
+    """Physical distance of a chord change, after the along / across decomposition of the Fretting-Transformer paper
+    (difficulty = fret stretch + locality + vertical stretch):
+      hand_shift_mm       movement of the centre of the pressed frets along the neck
+      finger_movement_mm  summed movement of each string's fret along the neck (open string = position 0)
+      barre_change        a barre is added or released (fixed penalty in mm)
+    A candidate for the 'change cost' of the chord neutrality rule (build spec section 11)."""
     all_strings = set(chord_a) | set(chord_b)
 
     def centroid(shape: Dict[str, int]) -> float:

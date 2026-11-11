@@ -19,6 +19,12 @@ evaluation sets the spec names, plus the scores used as the objective of the set
       (concrete / relational / tonal) and the variance of the interval and contour RDMs over all heard items,
       listen-only probes included (A-IV).
 All models are listed in analysis/models.py. Target |r| < config.RDM_THRESHOLD.
+
+How a correlation between two models is computed: build both RDMs over the same items, take the values above the
+diagonal (one value per item pair, _upper), and correlate them with Spearman's r. |r| near 0 = the two models predict
+different similarity patterns, so the data can tell them apart; |r| near 1 = they predict the same pattern.
+If a model is constant over the items (every pair equally different), r is undefined (NaN) and counts as 1 in the
+scores: a constant model gives no evidence of separability.
 """
 
 import itertools
@@ -32,9 +38,11 @@ from ukustim import config
 from ukustim.analysis import models as md
 from ukustim.core.items import Item
 
+# which variant types enter each evaluation set (listen-only probes never do)
 E1_VARIANTS = ("base", "alternate fingering", "recombined", "mixed", "new-chunk")
 E2_VARIANTS = ("base", "alternate fingering", "string-pair shift", "played transposition")
 
+# model pairs that MUST separate (they define the E1 / E2 scores)
 PAIRS_E1 = [("musical_chunk", "motor_chunk_misal_full"),
             ("musical_chunk", "motor_chunk_misal_lh"),
             ("motor_chunk_misal_lh", "concrete_sound"),
@@ -42,6 +50,7 @@ PAIRS_E1 = [("musical_chunk", "motor_chunk_misal_full"),
 PAIRS_E2 = [("movement_identity", "concrete_sound"),
             ("movement_identity", "abstract_structure"),
             ("concrete_sound", "abstract_structure")]
+# report-only pairs: nuisance models vs chunk models, and extra analysis contrasts shown under E1
 CHUNK_MODELS = ["musical_chunk", "motor_chunk_misal_lh"]
 PAIRS_NUISANCE = [(n, c) for n in md.NUISANCE_MODELS for c in CHUNK_MODELS]
 PAIRS_EXTRA = [("motor_chunk_misal_lh", "movement_identity"),   # identity is sparse in early bands (Q8): often constant on E1
@@ -49,6 +58,7 @@ PAIRS_EXTRA = [("motor_chunk_misal_lh", "movement_identity"),   # identity is sp
                ("musical_chunk", "motor_chunk_crossing_lh")]
 
 
+# 'reports without optimization' (build spec v1.7, section 8)
 M4_PAIRS = [("finger", "fret"), ("string", "abs_pitch")]
 A4_PAIRS = [("abs_pitch", "scale_degree"), ("interval_size", "musical_boundary"),
             ("abs_pitch", "intervals"), ("abs_pitch", "contour"), ("intervals", "scale_degree"),
@@ -57,20 +67,24 @@ A4_VARIANCE_MODELS = ["intervals", "contour"]
 
 
 def _upper(M: np.ndarray) -> np.ndarray:
+    """Values above the diagonal of an RDM: one per item pair (the matrix is symmetric, the diagonal is 0)."""
     return M[np.triu_indices(M.shape[0], k=1)]
 
 
 def _corr(va: np.ndarray, vb: np.ndarray) -> float:
+    """Spearman r between two vectors of pair values; NaN if fewer than 3 pairs or either vector is constant."""
     if len(va) < 3 or np.std(va) == 0 or np.std(vb) == 0:
         return float("nan")
     return float(spearmanr(va, vb).correlation)
 
 
 def _subset(items: Sequence[Item], variants) -> list:
+    """Played items of the given variant types (an evaluation set)."""
     return [i for i in items if i.played and i.variant_type in variants]
 
 
 def pair_correlations(items: Sequence[Item], pairs) -> Dict[tuple, float]:
+    """{(model_a, model_b): Spearman r} over the given items, computing each needed RDM once."""
     names = sorted({m for p in pairs for m in p})
     rdms = md.model_rdms(items, names)
     return {(a, b): _corr(_upper(rdms[a]), _upper(rdms[b])) for a, b in pairs}
@@ -89,11 +103,13 @@ def collinearity(items: Sequence[Item], components: Sequence[str] = None) -> Dic
         if len(y) < 3 or np.std(y) == 0:
             comp_out[c] = dict(R=float("nan"), vif=float("nan"))
             continue
+        # ordinary least squares on ranks: y ~ intercept + the other components; R^2 = explained variance
         yr = rankdata(y)
         A = np.column_stack([rankdata(o) for o in others] + [np.ones(len(y))])
         coef, *_ = np.linalg.lstsq(A, yr, rcond=None)
         r2 = 1 - np.sum((yr - A @ coef) ** 2) / np.sum((yr - yr.mean()) ** 2)
         r2 = min(max(r2, 0.0), 1.0)
+        # VIF = 1 / (1 - R^2): 1 = independent of the others, large = predictable from them
         comp_out[c] = dict(R=math.sqrt(r2), vif=float(1 / (1 - r2)) if r2 < 1 - 1e-12 else float("inf"))
     pairs = {(a, b): _corr(X[a], X[b]) for a, b in itertools.combinations(components, 2)}
     return dict(n_conditions=len([i for i in items if i.played]), components=comp_out, pairs=pairs)
@@ -121,6 +137,7 @@ def report(items: Sequence[Item]) -> Dict:
     M-IV / A-IV reports, full matrix over all played items."""
     e1, e2 = _subset(items, E1_VARIANTS), _subset(items, E2_VARIANTS)
     played = [i for i in items if i.played]
+    # model x model correlation matrix over all played items (for rdm_correlations.png)
     rdms = md.model_rdms(played)
     k = len(md.MODELS)
     corr = np.full((k, k), np.nan)
@@ -142,15 +159,18 @@ def _worst(pairs: Dict[tuple, float], wanted) -> float:
 
 
 def score_e1(rep: Dict) -> float:
+    """E1 score of a full report: worst |r| over PAIRS_E1."""
     return _worst(rep["e1"]["pairs"], PAIRS_E1)
 
 
 def score_e2(rep: Dict) -> float:
+    """E2 score of a full report: worst |r| over PAIRS_E2 (and the C-VIII multiple R if E2_INCLUDES_C8)."""
     s = _worst(rep["e2"]["pairs"], PAIRS_E2)
     return max(s, score_c8_of(rep["c8"])) if config.E2_INCLUDES_C8 else s
 
 
 def score_c8(rep: Dict) -> float:
+    """Largest C-VIII multiple R of a full report."""
     return score_c8_of(rep["c8"])
 
 
@@ -166,18 +186,22 @@ def scores(items: Sequence[Item]):
 
 
 def objective(items: Sequence[Item]) -> float:
-    """Search objective (lower is better): the E1 score, with the E2 score as a smaller second term."""
+    """Search objective (lower is better): the E1 score, with the E2 score as a smaller second term.
+    The search computes the same formula itself in objective_search.evaluate (with the penalties added)."""
     s1, s2 = scores(items)
     return s1 + 0.2 * s2
 
 
 def _fmt(r: float, thr: float) -> str:
+    """'r   ok' / 'r   ABOVE THRESHOLD' / 'nan n/a' for the report."""
     if math.isnan(r):
         return "  nan   n/a (constant model)"
     return f"{r:+.2f}   {'ok' if abs(r) < thr else 'ABOVE THRESHOLD'}"
 
 
 def format_report(rep: Dict) -> str:
+    """The separability part of report.txt, in this order: E1, E2, nuisance, C-VIII (both interaction forms),
+    descriptive M-IV / A-IV reports, the section 8a table."""
     thr = config.RDM_THRESHOLD
     lines = [f"Separability check, target |r| < {thr}", ""]
     for key, title, wanted in (("e1", "E1: musical chunk vs motor chunk (bases, alternate fingerings, generalization items)",
@@ -227,6 +251,7 @@ def format_report(rep: Dict) -> str:
 
 
 def save_heatmap(rep: Dict, path: str) -> None:
+    """rdm_correlations.png: the model x model Spearman matrix over all played items, with the values printed."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt

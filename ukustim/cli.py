@@ -9,8 +9,16 @@ Commands
   check DIR                       validate a hand-built set (chunks.csv + items.csv) and report separability
   cues DIR [--png --svg --pdf]    LilyPond tab cues (participant / researcher) for a hand-built set
   transpositions [--degree D]     how many valid bases allow a played transposition to each key
-All outputs go to config.OUTPUT_DIR.
+All outputs go to config.OUTPUT_DIR (--output DIR); --transposition-key K sets config.TRANSPOSITION_KEY.
 """
+
+# How the commands map onto the package (each cmd_* function below):
+#   counts          selection/counts.count_report
+#   search          selection/objective_search.search per (degree, bases)  -> best set -> report_set + loader.save_set
+#   search --exact  selection/exact_cover.find_sets_exhaustive, scored with objective_search.evaluate
+#   check DIR       formats/loader.load_set (regenerates family members) -> report_set
+#   cues DIR        formats/loader.load_set -> formats/cues.export_cues (optionally rendered)
+#   transpositions  family/transposition.feasibility_by_key
 
 import argparse
 import json
@@ -34,12 +42,15 @@ from ukustim.selection.assemble import assemble_family
 
 
 def _write(path, text):
+    """Write a text file, creating its folder."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, "w").write(text)
 
 
 def report_set(items, reg, notes, outdir, inv=None, title=""):
-    """Validate, score, write tables / tabs / MIDI / cues / separability report for a list of items."""
+    """Validate, score, write tables / tabs / MIDI / cues / separability report for a list of items.
+    report.txt sections, in order: title, check summary (failures listed), notes from the assembly, difficulty per
+    played item (with gaps to the base), variety of the bases, separability. Returns (check results, separability report)."""
     os.makedirs(outdir, exist_ok=True)
     results = val.validate_set(items)
     lines = [title, val.summarize(results), ""]
@@ -47,6 +58,7 @@ def report_set(items, reg, notes, outdir, inv=None, title=""):
         lines += ["Notes:"] + ["  " + n for n in notes] + [""]
     played = [i for i in items if i.played]
     inv = inv or Inventory()
+    # difficulty reference: 1,500 random valid bases at the configured degree
     model = dif.DifficultyModel.fit(reference.reference_items(inv, 1500, deg=config.MISALIGNMENT_DEGREE))
     by_id = {i.item_id: i for i in items}
     lines.append("Difficulty (mean z-score over the reference sample of valid bases):")
@@ -67,6 +79,7 @@ def report_set(items, reg, notes, outdir, inv=None, title=""):
 
 
 def cmd_counts(args):
+    """Feasibility counts -> feasibility_counts.json (and printed)."""
     inv = Inventory()
     rep = counts_mod.count_report(inv)
     _write(os.path.join(config.OUTPUT_DIR, "feasibility_counts.json"), json.dumps(rep, indent=1))
@@ -74,11 +87,14 @@ def cmd_counts(args):
 
 
 def _parse_range(s: str) -> List[int]:
+    """'3-6' -> [3, 4, 5, 6]; '4' -> [4]."""
     a, _, b = s.partition("-")
     return list(range(int(a), int(b or a) + 1))
 
 
 def cmd_search(args):
+    """Search every (degree, number of bases) cell, write search_summary.txt / .json, then report and save the best
+    set at the default degree (config.MISALIGNMENT_DEGREE) as prototype_degree<d>/ (with input/ CSVs for `check`)."""
     inv = Inventory()
     degrees = [args.degree] if args.degree else [1, 2, 3]
     lines = [f"Set search, strict chunk rule: turning points {config.TURNING_POINT_CHUNKS}; "
@@ -108,6 +124,7 @@ def cmd_search(args):
     if not results:
         print("no complete set found")
         return
+    # the best set is chosen among the cells at the default degree (all cells if none was searched)
     at_default = [r for r in results if r[0] == config.MISALIGNMENT_DEGREE] or results
     d, k, ev = min(at_default, key=lambda r: r[2].score)
     outdir = os.path.join(config.OUTPUT_DIR, f"prototype_degree{d}")
@@ -121,6 +138,7 @@ def cmd_search(args):
 
 
 def cmd_check(args):
+    """Load a set folder, rebuild its family members and write the full report to check_<folder>/."""
     items, reg, notes = loader.load_set(args.dir)
     outdir = os.path.join(config.OUTPUT_DIR, "check_" + os.path.basename(os.path.normpath(args.dir)))
     results, rep = report_set(items, reg, notes, outdir, title=f"Hand-built set {args.dir}")
@@ -129,6 +147,7 @@ def cmd_check(args):
 
 
 def cmd_cues(args):
+    """LilyPond cue sources (and images with --png / --svg / --pdf) for a set folder -> cues_<folder>/."""
     items, reg, notes = loader.load_set(args.dir)
     outdir = os.path.join(config.OUTPUT_DIR, "cues_" + os.path.basename(os.path.normpath(args.dir)))
     fmts = [f for f in ("png", "svg", "pdf") if getattr(args, f)]
@@ -137,6 +156,7 @@ def cmd_cues(args):
 
 
 def cmd_transpositions(args):
+    """Played-transposition feasibility per target key -> transposition_feasibility.json (Q11)."""
     inv = Inventory()
     degrees = [args.degree] if args.degree else [1, 2, 3]
     out = {}
@@ -150,6 +170,7 @@ def cmd_transpositions(args):
 
 
 def main(argv=None):
+    """Parse the command line, apply the global options to config, dispatch to cmd_*."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--output", default=None, help=f"output folder (default {config.OUTPUT_DIR})")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -175,6 +196,7 @@ def main(argv=None):
         sp.add_argument("--transposition-key", dest="transposition_key", default=None,
                         help=f"target key of the played transposition (default {config.TRANSPOSITION_KEY})")
     args = ap.parse_args(argv)
+    # global options change config before any module reads it (modules read config at call time)
     if args.output:
         config.OUTPUT_DIR = args.output
     if getattr(args, "transposition_key", None):

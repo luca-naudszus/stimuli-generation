@@ -2,6 +2,9 @@
 reference.py
 =============================
 Reference sample of valid bases for the difficulty z-scores (analysis/difficulty.py).
+
+The difficulty of an item is reported as a z-score against this sample: "how hard is this item compared with a
+typical valid base of this degree?". The sample is random but seeded, so reports are reproducible.
 """
 
 import random
@@ -17,7 +20,9 @@ from ukustim.core.items import Item
 
 
 def reference_items(inv: Inventory, n: int = 3000, deg: Optional[int] = None, seed: int = 0) -> List[Item]:
-    """Random valid bases (any order, composition of the given degree, random neutral fingering)."""
+    """Random valid bases (any order, composition of the given degree, random neutral fingering).
+    Draws (order, composition) pairs at random and keeps those with a neutral fingering until n items exist.
+    The CLI uses n = 1500."""
     rng = random.Random(config.SEED + 1000 + seed)
     deg = config.MISALIGNMENT_DEGREE if deg is None else deg
     comps = vs.misaligned_compositions(deg)

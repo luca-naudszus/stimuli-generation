@@ -4,6 +4,11 @@ difficulty.py
 Draft difficulty metric (build spec section 10): physical features of the fingering path, z-scored against
 a reference sample of valid items, then averaged. The prototype is a single band; for now the metric is used
 to report base-alternate gaps. Position shifts are always 0 in first position and therefore omitted.
+
+Use: DifficultyModel.fit(reference_items(...)) once (selection/reference.py, 1,500 random valid bases), then
+model.score(item) = mean over the features of (value - reference mean) / reference SD. 0 = a typical valid base,
++1 = one SD harder on average. The report lists every played item's score and the gap of each alternate and
+transposition to its base.
 """
 
 import json
@@ -15,10 +20,17 @@ from ukustim.core import versions as vs
 from ukustim.core.fretboard import step_distance_mm
 from ukustim.core.items import Item
 
+# physical features of the fingering path (Q5); all "more = harder"
 FEATURES = ["string_crossings", "fret_span", "distinct_fingers", "mean_step_mm", "max_step_mm", "little_finger_uses"]
 
 
 def difficulty_features(item: Item) -> Dict[str, float]:
+    """Raw feature values of one played item:
+      string_crossings     number of string changes
+      fret_span            highest minus lowest fretted fret (open strings ignored)
+      distinct_fingers     number of different left-hand fingers used
+      mean_step_mm / max_step_mm   hand travel between consecutive notes (soprano neck geometry)
+      little_finger_uses   notes on fret 4 (finger 4 under the default finger rule)"""
     pos = item.positions
     if pos is None:
         raise ValueError("listen-only item has no fingering")

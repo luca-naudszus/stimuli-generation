@@ -12,6 +12,13 @@ LilyPond export of tab cues, in two flavours (DRAFT, see claude/tab-rendering-op
 The .ly text is generated from the stored positions (string, fret, finger), so the picture shows exactly
 the fingering the validators checked. Rendering needs the lilypond program (pip package `lilypond`
 ships a binary, or install LilyPond itself).
+
+Two LilyPond details that explain the code below:
+  - LilyPond numbers strings from the TOP tab line down: string 1 = top line. In ukulele tab the top line is A,
+    so A = 1, E = 2, C = 3, G = 4 (ly_string). Each note is written with its string
+    (c'4\\3 = C4, a quarter note, on string 3), so LilyPond prints exactly our fret instead of choosing its own.
+  - LilyPond's TabStaff does not print left-hand fingerings, so the finger row is a Lyrics line attached to the
+    tab voice ("mel"); one syllable per note keeps it aligned.
 """
 
 import os
@@ -25,12 +32,13 @@ from ukustim.core.items import Item
 from ukustim.core.music_theory import ALL_KEY_ROOTS
 from ukustim.core.ukulele_geometry import STRING_ORDER, OPEN_STRING_MIDI
 
+# LilyPond note names (Dutch: 'is' = sharp), index = pitch class
 LY_NAMES = ["c", "cis", "d", "dis", "e", "f", "fis", "g", "gis", "a", "ais", "b"]
 VERSION = "2.24.0"
 
 
 def ly_pitch(midi: int) -> str:
-    """MIDI -> LilyPond absolute pitch (60 = c')."""
+    """MIDI -> LilyPond absolute pitch (60 = c'). Octave marks: ' per octave above c (MIDI 48), ',' below."""
     ticks = midi // 12 - 1 - 3
     return LY_NAMES[midi % 12] + ("'" * ticks if ticks > 0 else "," * (-ticks))
 
@@ -46,6 +54,8 @@ def tuning_ly() -> str:
 
 
 def _notes(item: Item, with_fingers: bool, with_chunk_marks: bool, chunk_bars: bool) -> str:
+    """The note list in LilyPond syntax: quarter notes with their string; optionally fingerings ('-2'), a chunk label
+    above the first note of each musical chunk, and explicit bar lines after each chunk."""
     n = config.CHUNK_LEN
     out = []
     for i, (pitch, pos) in enumerate(zip(item.pitches, item.positions)):
@@ -63,12 +73,14 @@ def _notes(item: Item, with_fingers: bool, with_chunk_marks: bool, chunk_bars: b
 
 
 def _letters(comp: Sequence[int]) -> str:
+    """Motor-chunk letters as lyrics syllables ('"A" "A" "A" "B" ...'), one per note."""
     out = []
     for k, p in enumerate(comp):
         out += [chr(ord("A") + k)] * p
     return " ".join(f'"{x}"' for x in out)
 
 
+# researcher cue: normal page settings, cropped to the content when rendered
 PAPER = r"""
 \paper {
   indent = 0\mm
@@ -145,6 +157,7 @@ ukuleleTuning = {tuning_ly()}
 
 
 def ly_key(key) -> str:
+    """LilyPond key name for \\key (C for free chromatic)."""
     return "c" if key is None else LY_NAMES[ALL_KEY_ROOTS[key]]
 
 
@@ -178,6 +191,7 @@ melody = {{ \\key {ly_key(item.key)} \\major \\time {config.BEATS_PER_BAR}/4 {no
 
 
 def lilypond_binary() -> Optional[str]:
+    """Path of the lilypond program: on PATH, or the binary shipped by the pip package `lilypond`; None if absent."""
     exe = shutil.which("lilypond")
     if exe:
         return exe
@@ -195,7 +209,7 @@ def render(ly_path: str, fmt: str = "png", dpi: int = 300, crop: bool = True) ->
     if exe is None:
         raise RuntimeError("lilypond not found: install LilyPond or `pip install lilypond`")
     base = os.path.splitext(ly_path)[0]
-    cmd = [exe] + (["-dcrop"] if crop else []) + ["-o", base]
+    cmd = [exe] + (["-dcrop"] if crop else []) + ["-o", base]     # -dcrop trims the page to the music
     if fmt == "png":
         cmd += ["--png", f"-dresolution={dpi}"]
     elif fmt == "svg":

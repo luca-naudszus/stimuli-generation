@@ -4,6 +4,13 @@ assemble.py
 From a solution (trained chunks, fingering, bases) to the full list of items: bases, alternate fingering,
 string-pair shift, played transposition, probes, recombined (musical-only / motor-only / both), mixed and
 new-chunk items. Notes list what could not be built and why.
+
+Order of work in assemble_family:
+  1. choose one alternate fingering per trained chunk (_choose_alternates) -> the registry
+  2. build the bases from the registry
+  3. per base: alternate item, string-pair shift, played transposition, probes
+  4. generalization layer: recombined (musical-only / both, then motor-only), mixed, new-chunk
+Everything that cannot be built is recorded in `notes` (shown in report.txt) instead of failing.
 """
 
 import itertools
@@ -26,9 +33,14 @@ from ukustim.selection.solution import Solution
 def _choose_alternates(inv: Inventory, sol: Solution, rng: random.Random, combos_max: int = 400):
     """Pick one alternate fingering per chunk (or none) so that as many bases as possible get a valid
     alternate item; ties go to the choice that moves MORE notes in the alternate items (build spec section 5, Q4:
-    "as many as neutrality and the band allow"). Returns the registry."""
+    "as many as neutrality and the band allow"). Returns the registry.
+
+    Each chunk with more than one fingering option can take any other option as its alternate, or none (index 0 in
+    a combo = no alternate, j > 0 = alts[j - 1]). All combinations are listed, shuffled, and at most combos_max are
+    scored by building every base's alternate item. Score = (bases with an alternate item, moved notes in total).
+    The alternate must be chosen per chunk, not per item, because a chunk has one alternate wherever it appears."""
     reg: Registry = {}
-    movable = []
+    movable = []                       # (chunk, its other fingering options)
     for c in sol.chunks:
         base_opt = inv.opts[c][sol.fingering[c]]
         alts = [o for j, o in enumerate(inv.opts[c]) if j != sol.fingering[c]]
@@ -40,6 +52,7 @@ def _choose_alternates(inv: Inventory, sol: Solution, rng: random.Random, combos
     combos = list(itertools.product(*ranges))
     rng.shuffle(combos)
     for combo in combos[:combos_max]:
+        # fresh copy of the registry without alternates, then set the alternates of this combination
         r2 = {k: ChunkDef(v.chunk_id, v.pitches, v.fingering, None, v.role) for k, v in reg.items()}
         for (c, alts), j in zip(movable, combo):
             if j > 0:
@@ -59,7 +72,10 @@ def _choose_alternates(inv: Inventory, sol: Solution, rng: random.Random, combos
 
 def assemble_family(inv: Inventory, sol: Solution, seed: int = 0, with_new_chunk_item: bool = True,
                     alt_combos: int = 400) -> Tuple[List[Item], Registry, List[str]]:
-    """Full item list for a solution + notes about what could not be built."""
+    """Full item list for a solution + notes about what could not be built.
+    Returns (items, registry, notes). Item IDs: B1..Bk bases, Bk-alt, Bk-shift, Bk-tr, Bk-p-<type> probes,
+    R-both, R-musical, R-motor, X1 (mixed), N1 (new-chunk). The seed makes the random choices reproducible.
+    Called by the search for every evaluated set and by report_set for the final one."""
     rng = random.Random(config.SEED + seed)
     notes: List[str] = []
     reg = _choose_alternates(inv, sol, rng, alt_combos)
@@ -86,6 +102,7 @@ def assemble_family(inv: Inventory, sol: Solution, seed: int = 0, with_new_chunk
         else:
             notes.append(f"{b.item_id}: played transposition to {config.TRANSPOSITION_KEY} impossible ({why})")
         items.extend(all_probes(b))
+    # generalization layer: items made across families, from the set's trained chunks
     comps = vs.misaligned_compositions(sol.degree)
     found = gen.recombined_musical(inv, bases, sol.chunks, sol.fingering, comps, reg, rng)
     for kind in ("both", "musical-only"):

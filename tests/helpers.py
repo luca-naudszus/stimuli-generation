@@ -1,4 +1,9 @@
-"""Shared test helpers: expect(), and a cached valid set (one solution assembled into a full family)."""
+"""Shared test helpers: expect(), and a cached valid set (one solution assembled into a full family).
+
+The tests use no framework: each test module has a run() function that calls expect(name, condition) for every
+check; expect prints PASS / FAIL and records failures in FAILED, and run_all.py prints the total. Most tests build
+on fixture(), a real set found by the exhaustive search, so they exercise the same code paths as the CLI.
+"""
 
 import os
 import sys
@@ -14,12 +19,15 @@ FAILED = []
 
 
 def expect(name, cond, detail=""):
+    """Record one check; `detail` is printed only on failure."""
     print(("PASS " if cond else "FAIL ") + name + (f"  ({detail})" if detail and not cond else ""))
     if not cond:
         FAILED.append(name)
 
 
 def failing_checks(results):
+    """Check numbers ('1', '2', ...) that failed in a list of validator Results; used to test that a deliberately
+    broken item fails exactly the intended check."""
     return sorted({r.check for r in results if not r.passed})
 
 
@@ -27,7 +35,8 @@ _FX = None
 
 
 def fixture():
-    """A valid degree-2 set (3 bases) with its whole family, built once."""
+    """A valid degree-2 set (3 bases) with its whole family, built once (cached in _FX).
+    Attributes: inv, sol, items, reg, notes, by_id, base (B1), alt (B1-alt or None), shift (B1-shift or None)."""
     global _FX
     if _FX is None:
         from ukustim.core.inventory import Inventory
@@ -44,7 +53,8 @@ def fixture():
 
 
 def transposable_base(key="D"):
-    """(base item, registry) for a valid base that can be transposed to `key`."""
+    """(base item, registry) for a valid base that can be transposed to `key` (the G set has almost none, Q11).
+    The registry is empty, so played_transposition registers the transposed chunks from scratch."""
     from ukustim.core import fretboard as fb
     from ukustim.core.fingering import positions_of
     from ukustim.core.inventory import Inventory

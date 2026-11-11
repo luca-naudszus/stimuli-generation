@@ -4,6 +4,12 @@ midi.py
 Standard MIDI File (format 0) at config.BPM, written without external libraries. The item file has the notes
 (time signature 3/4, one chunk per bar). With config.EXPORT_CLICK_TRACK a second file <item>_click.mid holds
 a metronome with an accent on beat 1 (GM percussion, channel 10), for the pacing cue.
+
+MIDI basics used here: time is counted in ticks, MIDI_PPQ ticks per quarter note (= one note of the item, one beat).
+A track is a list of events, each preceded by the delta time since the previous event as a variable-length quantity
+(_vlq). Note on = 0x90 + channel, note off = 0x80 + channel; channel 10 (percussion) is 0x99 / 0x89.
+Meta events: 0xFF 03 track name, 0xFF 51 tempo (microseconds per quarter note), 0xFF 58 time signature,
+0xFF 2F end of track.
 """
 
 from typing import List, Tuple
@@ -13,6 +19,7 @@ from ukustim.core.items import Item
 
 
 def _vlq(n: int) -> bytes:
+    """Variable-length quantity: 7 bits per byte, most significant group first, high bit set on all but the last."""
     out = [n & 0x7F]
     n >>= 7
     while n:
@@ -22,12 +29,15 @@ def _vlq(n: int) -> bytes:
 
 
 def _wrap(track: bytearray) -> bytes:
+    """File header (format 0, one track, PPQ) + the track chunk."""
     ppq = config.MIDI_PPQ
     header = b"MThd" + (6).to_bytes(4, "big") + (0).to_bytes(2, "big") + (1).to_bytes(2, "big") + ppq.to_bytes(2, "big")
     return header + b"MTrk" + len(track).to_bytes(4, "big") + bytes(track)
 
 
 def _track(name: str, program_msg: bytes, events: List[Tuple[int, int, bytes]]) -> bytearray:
+    """Track with name, tempo, time signature, optional program change, the events and end-of-track.
+    events = (absolute tick, sort key, message); at equal ticks note-offs (key 0) come before note-ons (key 1)."""
     ppq = config.MIDI_PPQ
     track = bytearray()
     track += _vlq(0) + b"\xff\x03" + _vlq(len(name)) + name.encode()
@@ -45,6 +55,7 @@ def _track(name: str, program_msg: bytes, events: List[Tuple[int, int, bytes]]) 
 
 
 def build_midi(item: Item) -> bytes:
+    """The item's notes: one per beat, sounding NOTE_GATE of a beat, velocity per note for the accent probe."""
     ppq = config.MIDI_PPQ
     gate = int(round(ppq * config.NOTE_GATE))
     events = []

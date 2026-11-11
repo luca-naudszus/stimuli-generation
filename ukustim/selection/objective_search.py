@@ -8,10 +8,17 @@ Set search with the separability score as the objective (build spec sections 3, 
 2. Evaluate a set by building its whole family (alternate fingering, shift, transposition, recombined, mixed,
    new-chunk items) and computing the objective of analysis/separability.py (worst |r| over the pairs that must
    separate; smaller is better). Missing family members add a penalty.
-3. Local moves on the best sets: change a base's order, a base's composition, or one chunk's fingering.
+3. Local moves on the best sets: replace one base by another valid base that fits the rest of the set
+   (same fingering for shared chunks, within N trained chunks).
 
 Time-boxed (config.SEARCH_BUDGET_S per degree and number of bases). Results are random-restart local search,
-not proofs of optimality.
+not proofs of optimality; two runs can differ by about 0.1 in E1.
+
+Score of a set (lower is better):
+    objective = E1 + 0.2 * E2      (E1, E2 = worst |r| over the model pairs that must separate; analysis/separability)
+    score     = objective + missing_penalty(notes) - COMP_VARIETY_BONUS * (number of distinct compositions)
+The penalty weights below are implementation choices, not spec values; they only rank sets.
+Called by cli.cmd_search once per (degree, number of bases).
 """
 
 import random
@@ -40,6 +47,8 @@ COMP_VARIETY_BONUS = 0.01                    # per distinct composition among th
 
 
 def missing_penalty(notes: Sequence[str], n_bases: int) -> float:
+    """Penalty from the assembly notes (assemble_family records what it could not build). Notes about one base start
+    with its ID ('B3: ...'); all other notes are about missing generalization items."""
     alt = sum("no valid alternate" in n for n in notes)
     shift = sum("string-pair shift impossible" in n for n in notes)
     trans = sum("played transposition" in n for n in notes)
@@ -50,6 +59,7 @@ def missing_penalty(notes: Sequence[str], n_bases: int) -> float:
 
 @dataclass
 class Evaluated:
+    """A set after evaluation: the solution, its full item list and registry, the assembly notes and the scores."""
     score: float
     solution: Solution
     items: List[Item]
@@ -63,6 +73,7 @@ class Evaluated:
 def feasible(inv: Inventory, sol: Solution) -> bool:
     """Neutrality and span for every base with the chosen fingering, every chunk in >= 2 bases, distinct orders,
     minimum recurrence (every base shares a crossing motor chunk with another base)."""
+    # musical side: distinct orders, every chunk used at least twice, turning-point cap
     orders = [t for t, _ in sol.bases]
     if len(set(orders)) != len(orders):
         return False
@@ -72,6 +83,7 @@ def feasible(inv: Inventory, sol: Solution) -> bool:
             cnt[c] = cnt.get(c, 0) + 1
     if set(cnt) != set(sol.chunks) or min(cnt.values()) < 2 or not turning_cap_ok(sol.chunks):
         return False
+    # motor side: every base neutral with the set's fingering (all chunks pinned = a yes / no check), then recurrence
     motor, cross = [], []
     for t, comp in sol.bases:
         if vs.degree(comp) != sol.degree:
@@ -86,6 +98,8 @@ def feasible(inv: Inventory, sol: Solution) -> bool:
 
 
 def evaluate(inv: Inventory, sol: Solution, alt_combos: int = 400, seed: int = 0) -> Evaluated:
+    """Build the set's whole family and score it (see module docstring). This is the expensive step of the search:
+    every evaluation assembles all family members and computes the E1 / E2 correlations."""
     items, reg, notes = assemble_family(inv, sol, seed=seed, alt_combos=alt_combos)
     e1, e2 = sep.scores(items)
     obj = e1 + 0.2 * e2
@@ -103,11 +117,15 @@ class Cand:
     transposable: bool = False      # a played transposition to config.TRANSPOSITION_KEY exists for this base
 
     def fing(self) -> Dict[Tuple[int, ...], int]:
+        """chunk -> fingering option index, for this base's chunks."""
         return dict(zip(self.order, self.assign))
 
 
 def candidates(inv: Inventory, deg: int) -> List[Cand]:
-    """Every valid base at this degree (neutrality and span hold). Small enough to enumerate (about 2,000 at degree 2)."""
+    """Every valid base at this degree (neutrality and span hold). Small enough to enumerate (about 2,000 at degree 2).
+    One Cand per (order, composition, neutral fingering). The transposability test runs once per (order, composition),
+    since it does not depend on the fingering. Degree 1 gives about 9,000 candidates, so enumeration takes a
+    noticeable part of the time budget there."""
     out = []
     comps = vs.misaligned_compositions(deg)
     for t in inv.tuples:
@@ -123,19 +141,26 @@ def candidates(inv: Inventory, deg: int) -> List[Cand]:
 
 
 def _compatible(c: Cand, F: Dict[Tuple[int, ...], int]) -> bool:
+    """True if the candidate fingers every chunk the set already has (F) the same way (a chunk not in F is free)."""
     return all(F.get(ch_, j) == j for ch_, j in c.fing().items())
 
 
 def sample_solution(inv: Inventory, cands: Sequence[Cand], deg: int, k: int, n_trained: int,
                     rng: random.Random) -> Optional[Solution]:
     """Build a set of k bases from compatible candidates (same fingering for a shared chunk), preferring
-    candidates that reuse chunks already in the set, within n_trained chunks."""
+    candidates that reuse chunks already in the set, within n_trained chunks.
+
+    Weights: (1 + 4 * shared^2) * (1 + 3 * transposable), shared = chunks the candidate shares with the set so far.
+    Reusing chunks is what makes every chunk occur in >= 2 bases; preferring transposable bases gives played
+    transpositions. The first base is transposable 70 % of the time (if any exists). None if the set cannot be
+    completed or fails feasible()."""
     tr = [c for c in cands if c.transposable]
     first = rng.choice(tr) if tr and rng.random() < 0.7 else rng.choice(cands)
     chosen = [first]
     F = dict(first.fing())
     P = set(first.order)
     while len(chosen) < k:
+        # compatible candidates: new order, same fingering for known chunks, chunk count stays within n_trained
         orders = {c.order for c in chosen}
         pool = [c for c in cands if c.order not in orders and _compatible(c, F) and len(P | set(c.order)) <= n_trained]
         if not pool:
@@ -151,7 +176,9 @@ def sample_solution(inv: Inventory, cands: Sequence[Cand], deg: int, k: int, n_t
 
 def neighbours(inv: Inventory, cands: Sequence[Cand], sol: Solution, rng: random.Random,
                n_trained: int, n: int = 6) -> List[Solution]:
-    """Replace one base by another valid base that fits the others (same fingering for shared chunks)."""
+    """Replace one base by another valid base that fits the others (same fingering for shared chunks).
+    Returns up to n distinct feasible neighbours. The fingering map F is rebuilt from the kept bases only, so a chunk
+    used only by the removed base becomes free again."""
     out: List[Solution] = []
     tries = 0
     while len(out) < n and tries < n * 8:
@@ -178,7 +205,9 @@ def neighbours(inv: Inventory, cands: Sequence[Cand], sol: Solution, rng: random
 
 def search(inv: Inventory, deg: int, k: int, n_trained: Optional[int] = None, budget_s: Optional[float] = None,
            seed: int = 0, top: int = 3, log: Optional[Callable[[str], None]] = None) -> Tuple[List[Evaluated], Dict]:
-    """Random sampling (about 60% of the time) followed by local moves from the best sets."""
+    """Random sampling (about 60% of the time) followed by local moves from the best sets.
+    Returns (all evaluated sets ranked by score, statistics). The clock starts before candidate enumeration, so the
+    enumeration time counts against the budget. Every distinct set is evaluated once (`seen`, keyed by Solution.key)."""
     n_trained = config.N_TRAINED_CHUNKS if n_trained is None else n_trained
     budget = config.SEARCH_BUDGET_S if budget_s is None else budget_s
     rng = random.Random(config.SEED + 5000 + 97 * deg + 13 * k + seed)
@@ -195,6 +224,7 @@ def search(inv: Inventory, deg: int, k: int, n_trained: Optional[int] = None, bu
         stats["evaluated"] += 1
         return ev
 
+    # phase 1: random feasible sets
     while time.time() - t0 < 0.6 * budget:
         stats["samples"] += 1
         sol = sample_solution(inv, cands, deg, k, n_trained, rng)
@@ -203,6 +233,7 @@ def search(inv: Inventory, deg: int, k: int, n_trained: Optional[int] = None, bu
         stats["feasible"] += 1
         add(sol)
     best = lambda: sorted(seen.values(), key=lambda e: e.score)
+    # phase 2: local search; pick one of the `top` best sets and try a few neighbours
     while time.time() - t0 < budget and seen:
         parent = rng.choice(best()[:top])
         for cand in neighbours(inv, cands, parent.solution, rng, n_trained, n=4):

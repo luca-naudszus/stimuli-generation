@@ -1,6 +1,6 @@
 # Pipeline v2 walkthrough: one base from start to finish
 
-**Version 2 (5 Nov 2026).** Updated for build spec v1.7: the alternate tie-break is fixed (7a), and step 9 now covers the C-VIII combination components and the M-IV / A-IV reports. The assignment template is added to step 11. Maintained by the implementation chat. This explains what `pipeline_v2` does at each step, which file does it, and why. Every number comes from a real run on base **B1** of `examples/prototype_set` (strict chunk rule, degree 2, transposition key G). You can reproduce all of them with `python docs/walkthrough_trace.py` from the pipeline folder. Rationale for the design itself lives in the build spec and the checklist; this doc only covers how the code implements it.
+**Version 4 (11 Nov 2026).** Step 7 explains composition, registry and trained proportions. Version 3 (6 Nov 2026): section 3 rewritten: the full flow of `core/versions.py`, every function with its callers, and the motor-chunk identities. Version 2 (5 Nov 2026) was updated for build spec v1.7: the alternate tie-break is fixed (7a), and step 9 now covers the C-VIII combination components and the M-IV / A-IV reports. The assignment template is added to step 11. Maintained by the implementation chat. This explains what `pipeline_v2` does at each step, which file does it, and why. Every number comes from a real run on base **B1** of `examples/prototype_set` (strict chunk rule, degree 2, transposition key G). You can reproduce all of them with `python docs/walkthrough_trace.py` from the pipeline folder. Rationale for the design itself lives in the build spec and the checklist; this doc only covers how the code implements it.
 
 ## 0. The big picture
 
@@ -82,30 +82,117 @@ B1's order is **C-D-E | D-E-F | E-F-G | F-G-A**: three direction cues, each a st
 
 ## 3. The two chunkings and the neutrality rule
 
-**File:** `core/versions.py`.
+**File:** `core/versions.py`. This module knows nothing about pitches. It deals with **where boundaries lie** in a 12-note item and answers four questions for the rest of the pipeline:
 
-Transitions are numbered 1 to 11 (transition *t* lies between notes *t* and *t*+1). The musical boundaries are always **M = {3, 6, 9}**.
+- **(a)** Which motor groupings exist?
+- **(b)** Where are their boundaries, and how misaligned are they with the musical chunks?
+- **(c)** Does a fingering favour one grouping over the other? (This is the neutrality rule.)
+- **(d)** What are the motor chunks of an item, and what is their identity?
 
-- `compositions()` lists every way to cut 12 notes into motor chunks of 2 and 3: 12 compositions, one of them the aligned 3-3-3-3.
-- `boundaries(comp)` turns a composition into its set of boundaries B.
-- `degree(comp)` = |M − B|, the number of musical boundaries that are not motor boundaries.
-- `misaligned_compositions(d)` gives 3 compositions at degree 1, **5 at degree 2**, and 3 at degree 3.
+**3.1 The picture to keep in mind.** Here is base B1 with everything this module computes:
 
-B1 uses **3-2-3-2-2**:
+```
+note (0-based)    0     1     2     3     4     5     6     7     8     9     10    11
+B1                C0    C2    C4    C2    E0    E1    E0    E1    E3    E1    E3    G2
+transition t         1     2     3     4     5     6     7     8     9    10    11
+musical M                        |                 |                 |
+motor B (3-2-3-2-2)              |           |                 |           |
+M Δ B (forbidden)                            x     x           x     x     x
+string change                          ^                                         ^
+```
 
-- B = {3, 5, 8, 10}, degree 2 (6 and 9 are missing).
-- `forbidden_crossings()` = M Δ B = **{5, 6, 8, 9, 10}**.
+**Indexing.** Notes are 0-based (Python lists); transitions are 1-based. Transition *t* lies between note *t* − 1 and note *t*, so transition 3 is the gap after the third note.
 
-Why forbid a string change there? A string change is a physical grouping cue. At a transition that is a boundary in only one chunking, it would favour that chunking. At 3 (in both chunkings) or at 1, 2, 4, 7, 11 (in neither), it is neutral.
+A composition (a tuple of motor-chunk lengths, e.g. `(3, 2, 3, 2, 2)`) describes the misaligned motor chunking. The aligned chunking is always `(3, 3, 3, 3)`.
 
-So the neutrality rule is: the string crossings X must avoid M Δ B (`neutrality_violations()`).
+**3.2 The flow.** Functions in the order the pipeline uses them:
 
-**Motor chunk identity** (`motor_id()`) has two forms:
+```
+compositions()                         all ways to cut 12 notes into 2s and 3s (12 compositions)
+   └─ misaligned_compositions(d)       keep those with degree d (5 at degree 2)
+         uses boundaries(), degree(), musical_boundaries()
+                    │
+   for every chunk order × composition (step 5)
+                    │
+   forbidden_crossings(comp) = M Δ B   ──►  fingering search (core/fingering.py, step 4)
+                    │                       rejects any option with a string change in M Δ B
+   neutrality_violations(positions, comp)   = string_crossings(positions) ∩ M Δ B
+                    │                       used to test candidate alternate fingerings and by check 2
+   a valid base exists
+                    │
+   motor_chunks(positions, comp, mode)      cut the item into motor chunks and name each one
+      = segments(comp) + motor_id(...)
+                    │
+   crossing_motor_ids(positions, comp)      the motor chunks that span a musical boundary (is_crossing)
+                    │
+   used by: recurrence (search, check 4), trained proportions, model RDMs, note table, variety report
+```
 
-- `full` = string, fret and finger of each note, e.g. `C0/0-C2/2-C4/4`.
-- `lh` (left hand) = fret, finger and relative string pattern, e.g. `0/0-2/2-4/4@+0,+0`. A string-pair shift keeps this identity.
+**3.3 Every function, with B1's values and its callers.**
 
-A motor chunk is *crossing* (`is_crossing()`) if it spans a musical boundary.
+| Function | What it returns | B1 | Called by |
+|---|---|---|---|
+| `musical_boundaries()` | M = transitions after each musical chunk | {3, 6, 9} | `degree`, `misaligned_compositions`, `forbidden_crossings`, `is_crossing`; check 2; the `musical_boundary` model |
+| `compositions()` | every tuple of 2s and 3s summing to 12, by a recursive search like the one for chunk orders | 12 tuples, from 2-2-2-2-2-2 to 3-3-3-3 | only `misaligned_compositions` (and tests) |
+| `aligned_composition()` | `(3, 3, 3, 3)` | | trained proportions (aligned motor chunks), note table, `motor_chunk_aligned_*` models, the aligned row of tabs and cues; probes when an item has no composition |
+| `boundaries(comp)` | B = running sums of the composition, without the last one (12) | 3, 3+2, 3+2+3, … = {3, 5, 8, 10} | `degree`, `misaligned_compositions`, `forbidden_crossings`; check 2 (B ≠ M) |
+| `degree(comp)` | \|M − B\|: the musical boundaries that are not motor boundaries | {6, 9} → 2 | `misaligned_compositions`; the search's `feasible()` (every base has the chosen degree); the item table |
+| `misaligned_compositions(d)` | compositions with B ≠ M and degree d | 5 at d = 2: 2-2-2-2-2-2, 2-2-3-2-3, 2-3-2-2-3, 3-2-2-3-2, 3-2-3-2-2 | every place that loops over compositions: `candidates`, `counts`, `exact_cover`, `reference`, `assemble`, transposition feasibility |
+| `forbidden_crossings(comp)` | M Δ B (symmetric difference) | {5, 6, 8, 9, 10} | fingering search; `neutrality_violations`; the motor-only recombination search; check 2 |
+| `string_crossings(positions)` | transitions where the string changes | {4, 11} | `neutrality_violations`; check 2; the difficulty metric (number of crossings) |
+| `neutrality_violations(positions, comp)` | string crossings that fall in M Δ B (empty = neutral) | ∅ | `items.structurally_ok`, which tests each candidate alternate fingering; check 2. (Shifts keep the base's crossings; transpositions and recombined items are fingered with the search below, which applies M Δ B itself.) |
+| `segments(comp)` | 0-based `[start, end)` ranges of the motor chunks | (0,3) (3,5) (5,8) (8,10) (10,12) | `motor_chunks`; the accent probe (the start of each segment is played loud); the motor-only recombination (cuts the bases into their motor-chunk pieces) |
+| `is_crossing(start, end)` | True if a musical boundary lies strictly inside `[start, end)` | (5,8) and (8,10) | `crossing_motor_ids`; the crossing-chunk model |
+| `motor_id(positions, mode)` | the name of one motor chunk (see 3.5) | `E1/1-E0/0-E1/1` | only `motor_chunks`; nothing else calls it directly |
+| `motor_chunks(positions, comp, mode)` | list of (start, end, motor_id) for one chunking | five triples, see 3.5 | trained proportions, recurrence (search and check 4), motor-chunk models, note table, variety report |
+| `crossing_motor_ids(positions, comp)` | the IDs of the crossing motor chunks (`full` mode) | {`E1/1-E0/0-E1/1`, `E3/3-E1/1`} | recurrence in the search (`exact_cover._share_ok`) and in check 4; variety report |
+| `comp_to_str`, `comp_from_str` | `(3,2,3,2,2)` ↔ `"3-2-3-2-2"` | | CSV files, tables, reports |
+
+**Why `start < t < end`.** A motor chunk `[a, b)` contains notes *a* to *b* − 1, so its internal transitions are *a* + 1 to *b* − 1. A boundary *t* therefore lies inside the chunk exactly when *a* < *t* < *b*. For example, `(3, 5)` is notes 3 and 4 with internal transition 4: no musical boundary, so not crossing. `(5, 8)` has internal transitions 6 and 7: it contains boundary 6, so it is crossing.
+
+**Why the fingering search doesn't call `neutrality_violations`.** `neutrality_violations` needs all 12 positions. The fingering search (`valid_assignments`, step 4) builds a base chunk by chunk and wants to reject a bad option as soon as it is placed. So it applies the same test locally to each new chunk:
+
+- a crossing inside the chunk at transition *t*₀ + *q* + 1, where *t*₀ is the transition just before the chunk and *q* the crossing's position inside it;
+- the junction crossing at *t*₀ itself.
+
+Both are checked against `forbidden_crossings(comp)`. The result is the same; the local version only prunes earlier.
+
+**3.4 Why M Δ B.** Two facts:
+
+1. A string change is a physical seam in the movement, so it is a natural place to break a sequence into units, whatever was trained.
+2. The aligned and misaligned versions of a base use the **same notes and fingering**; they differ only in how the base is taught.
+
+For a chunking effect to come from training, the physical layout must favour neither chunking. Every transition is one of four kinds:
+
+| Kind | B1 transitions | A string change here… |
+|---|---|---|
+| boundary in both (M ∩ B) | 3 | marks a break that both chunkings have → neutral, allowed |
+| boundary in neither | 1, 2, 4, 7, 11 | lies inside a chunk in both → neutral, allowed |
+| musical boundary only (M − B) | 6, 9 | would hand the aligned grouping a physical boundary → forbidden |
+| motor boundary only (B − M) | 5, 8, 10 | would hand the misaligned grouping a physical boundary → forbidden |
+
+The two forbidden kinds together are M Δ B. B1 changes string at 4 and 11, both "neither", so it is neutral.
+
+The cost is that the forbidden set grows with the degree: 3 transitions at degree 1, 5–6 at degree 2, 7 at degree 3. This is why valid bases drop from 1,216 to 524 to 107. It is also why the unshared boundaries rarely get a leap (Q15): a leap there would need a string change.
+
+**3.5 Motor chunks and their identity.** `motor_chunks()` walks `segments(comp)` and names each slice with `motor_id()`. B1 in the misaligned version (3-2-3-2-2):
+
+| Segment | Notes | `full` ID | `lh` ID | Crossing? |
+|---|---|---|---|---|
+| (0, 3) | C0 C2 C4 | `C0/0-C2/2-C4/4` | `0/0-2/2-4/4@+0,+0` | no |
+| (3, 5) | C2 E0 | `C2/2-E0/0` | `2/2-0/0@+1` | no |
+| (5, 8) | E1 E0 E1 | `E1/1-E0/0-E1/1` | `1/1-0/0-1/1@+0,+0` | yes (boundary 6) |
+| (8, 10) | E3 E1 | `E3/3-E1/1` | `3/3-1/1@+0` | yes (boundary 9) |
+| (10, 12) | E3 G2 | `E3/3-G2/2` | `3/3-2/2@-2` | no |
+
+With `aligned_composition()` the same function gives B1's aligned motor chunks: `C0/0-C2/2-C4/4`, `C2/2-E0/0-E1/1`, `E0/0-E1/1-E3/3`, `E1/1-E3/3-G2/2`.
+
+The two identities:
+
+- **`full`** = string, fret and finger of each note. Two motor chunks are the same only if they are physically identical. This is the default, used for recurrence (search and check 4) and the trained proportions.
+- **`lh`** (left hand) = fret and finger of each note, plus the relative string pattern after `@` (+1 = one string towards A, −2 = two strings towards G). The same hand shape on another string pair counts as the same chunk, so a string-pair shift shares its `lh` motor chunks with its base (Q7, Q8). Used by the `motor_chunk_*_lh` models, the crossing-chunk model and the `lh` columns of the note table.
+
+A side effect of `lh`: C0-C2-C4 (C-D-E) and G0-G2-G4 (G-A-B) get the same `lh` ID. That is intended (same hand movement), but it means two items with different musical chunks can be identical on the `lh` motor model (step 9).
 
 ## 4. Fingering search for one chunk order
 
@@ -189,6 +276,18 @@ These weights are my choice, not the spec's; they only rank sets. Lower score is
 
 **Files:** `selection/assemble.py` (`assemble_family`), `family/*`. For hand-built sets, `formats/loader.py` (`with_family_members`) calls the same builders.
 
+Three terms used throughout this step:
+
+- **Composition:** an item's misaligned motor chunking, as a tuple of chunk lengths (2s and 3s summing to 12), e.g. `(3, 2, 3, 2, 2)`. The aligned chunking is always 3-3-3-3 and is not stored.
+  - Bases get theirs from the search.
+  - Alternates, shifts, transpositions and probes inherit the base's composition.
+  - Generalization items take the first composition of the set's degree that allows a neutral fingering.
+- **Registry:** `Dict[chunk ID, ChunkDef]`, the one place that says how each chunk is played.
+  - A `ChunkDef` holds the pitches, the fingering, at most one alternate, and a role (`trained`, `new` or `transposed`).
+  - Items are built from chunk IDs through it (`build_item`), so a chunk can only be fingered one way.
+  - It is saved as `chunks.csv`.
+- **Trained:** occurs in a base of the set; see the end of this step.
+
 **7a. Registry and alternate choice** (`_choose_alternates`). The registry maps chunk ID to `ChunkDef`, which holds the pitches, the main fingering and at most one alternate fingering (Q4).
 
 Each chunk can take any of its other fingerings as its alternate, or none. Up to 400 random combinations are tried. For each, the code counts how many bases then get a valid alternate item and keeps the best combination. Ties go to the combination whose alternate items move **more** notes in total, as Q4 asks (fixed on 5 Nov; before, ties went to fewer moved notes). The example set was built before the fix, so its alternates may differ from what a new search would choose; it is still a valid set.
@@ -241,7 +340,21 @@ When a shift exists:
 - **`mixed_or_new`** finds an order with 2 trained and 2 new chunks (X1), or with 0 trained chunks (N1).
 - **`register_new`** gives a new chunk the ID `new:<pitches>`. If the same pitches come up with a different fingering, the ID gets a suffix: X1 contains `new:G4-F4-E4~2` because N1 already registered G-F-E with another fingering.
 
-**Trained proportions** (`family/trained.py`). "Trained" means it occurs in a base. The recombination type follows from the proportions: musical = 1 and motor = 1 gives **both**; only musical = 1 gives **musical-only**; only motor = 1 gives **motor-only**.
+**Trained proportions** (`family/trained.py`). `Trained(bases)` collects three sets from the bases:
+
+- musical chunk IDs;
+- `full` motor-chunk IDs, with each base cut by its own composition;
+- `full` motor-chunk IDs, with each base cut 3-3-3-3.
+
+For any item, `proportions()` gives the share of its musical chunks (out of 4), of its misaligned motor chunks (out of 5 or 6) and of its aligned motor chunks (out of 4) that are in those sets. Musical chunks match by ID, so `new:` never counts; motor chunks match by content. This is why the new-chunk item N1 still has 2 of 5 trained motor chunks.
+
+The recombination type follows from the proportions:
+
+- musical = 1 and motor = 1 gives **both**;
+- only musical = 1 gives **musical-only**;
+- only motor = 1 gives **motor-only**.
+
+In `recombined_musical` every chunk is trained by construction, so the misaligned motor proportion alone decides between both and musical-only. R-musical has 4 of 5 trained motor chunks, because its `G0-G2-G4` (all of G-A-B) never occurs in a base under a composition that starts with 3. "Trained" currently counts bases only, not trained variants (Q18).
 
 | Item | musical | motor, misaligned | motor, aligned | type |
 |---|---|---|---|---|

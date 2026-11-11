@@ -5,6 +5,10 @@ Note table and item table (build spec section 7), written as CSV, plus an empty 
 (one row per item; copied per participant and filled later). withheld_alternate (build spec v1.7) is 0 for
 alternate-fingering items and blank for every other item; set it to 1 for alternates held back for the
 new-fingering test (checklist item 17).
+
+note_table.csv   one row per note of every item (listen-only items have empty string / fret / finger / motor columns)
+item_table.csv   one row per item: type, key, base, composition, trained proportions, recombination type
+assignment_template.csv   participant-specific columns left empty
 """
 
 import csv
@@ -30,6 +34,7 @@ ASSIGNMENT_COLUMNS = ["participant_id", "item_id", "family_id", "variant_type", 
 
 
 def _motor_ids_per_note(item: Item, comp, mode: str = "full") -> List[str]:
+    """For each of the 12 notes, the ID of the motor chunk it belongs to under the given composition."""
     out = [""] * config.N_NOTES
     for a, b, mid in vs.motor_chunks(item.positions, comp, mode):
         for i in range(a, b):
@@ -38,6 +43,8 @@ def _motor_ids_per_note(item: Item, comp, mode: str = "full") -> List[str]:
 
 
 def note_rows(item: Item) -> List[Dict]:
+    """Rows of the note table for one item. Indexing: note_index 1..12, onset_beat 0..11, beat_in_bar 1..3,
+    bar_index 1..4 (3/4, one musical chunk per bar). hand_position is always 1 (first position)."""
     n = config.CHUNK_LEN
     blank = [""] * config.N_NOTES
     ok_al = item.played
@@ -63,10 +70,13 @@ def note_rows(item: Item) -> List[Dict]:
 
 
 def _fmt(x):
+    """Proportions rounded to 3 decimals; None (not applicable) -> empty cell."""
     return "" if x is None else round(x, 3)
 
 
 def item_row(item: Item, trained: Trained) -> Dict:
+    """One item-table row. The recombination type is derived again from the proportions (not taken from
+    item.preserved), so the table always agrees with the numbers next to it."""
     p = trained.proportions(item)
     return dict(item_id=item.item_id, family_id=item.family_id, layer=item.layer, variant_type=item.variant_type,
                 key=item.key or "", base_item_id=item.base_item_id,
@@ -80,6 +90,7 @@ def item_row(item: Item, trained: Trained) -> Dict:
 
 
 def assignment_row(item: Item) -> Dict:
+    """Template row: item columns filled, participant columns empty; listen-only items are pre-marked."""
     return dict(participant_id="", item_id=item.item_id, family_id=item.family_id, variant_type=item.variant_type,
                 chunking_version="", design_group="listen-only" if not item.played else "", difficulty_band="",
                 intro_week_listening="", intro_week_playing="",
@@ -87,6 +98,7 @@ def assignment_row(item: Item) -> Dict:
 
 
 def write_tables(items: Sequence[Item], outdir: str) -> None:
+    """Write note_table.csv, item_table.csv and assignment_template.csv into outdir."""
     os.makedirs(outdir, exist_ok=True)
     trained = Trained(items)
     with open(os.path.join(outdir, "note_table.csv"), "w", newline="") as f:

@@ -55,6 +55,15 @@ def run():
     s1b, s2b = sep.scores(fx.items)
     config.E2_INCLUDES_C8 = old
     expect("E2_INCLUDES_C8 can only raise the E2 score", s1 == s1b and s2 >= s2b)
+    old = config.E2_INCLUDES_C8
+    tags = {}
+    for flag in (False, True):
+        config.E2_INCLUDES_C8 = flag
+        tags[flag] = (sep._c8_tag("c8"), sep._c8_tag("c8_product"))
+    config.E2_INCLUDES_C8 = old
+    expect("C-VIII report tags: main block report-only unless E2_INCLUDES_C8; product form always report-only",
+           tags[False] == ("   (report only)", "   (report only)")
+           and tags[True] == ("   (part of the E2 score)", "   (report only)"))
     txt = sep.format_report(sep.report(fx.items))
     expect("report shows C-VIII, the descriptive reports and the 8a table",
            "C-VIII components" in txt and "Reports without optimization" in txt and "research questions they serve" in txt)

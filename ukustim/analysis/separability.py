@@ -199,6 +199,14 @@ def _fmt(r: float, thr: float) -> str:
     return f"{r:+.2f}   {'ok' if abs(r) < thr else 'ABOVE THRESHOLD'}"
 
 
+def _c8_tag(key: str) -> str:
+    """Label of a C-VIII block in the report: the joint-interaction block counts in the E2 score only when
+    config.E2_INCLUDES_C8 is on; the product-form block is never scored."""
+    if key == "c8" and config.E2_INCLUDES_C8:
+        return "   (part of the E2 score)"
+    return "   (report only)"
+
+
 def format_report(rep: Dict) -> str:
     """The separability part of report.txt, in this order: E1, E2, nuisance, C-VIII (both interaction forms),
     descriptive M-IV / A-IV reports, the section 8a table."""
@@ -222,7 +230,7 @@ def format_report(rep: Dict) -> str:
                        ("c8_product", "C-VIII, alternative interaction 1 - s_sound x s_move")):
         col = rep[key]
         lines += ["", f"{title}; target multiple R < {thr} (VIF < {vif_max:.2f}); {col['n_conditions']} items"
-                  + ("" if key == "c8" or config.E2_INCLUDES_C8 is False else "   (report only)")]
+                  + _c8_tag(key)]
         for c, v in col["components"].items():
             if math.isnan(v["R"]):
                 lines.append(f"  {c:<26} constant (n/a)")
